@@ -102,20 +102,6 @@ This project keeps **living technical documentation** in [`Docs/`](Docs/) — a 
 
 ---
 
-## Building
-
-> Requires **Unreal Engine 5.7** and a C++ toolchain (Visual Studio 2022 on Windows).
-
-1. Clone the repository.
-2. Right-click `ProjectMirror.uproject` → **Generate Visual Studio project files**.
-3. Open `ProjectMirror.sln` and build the **Development Editor** configuration, **or** double-click the `.uproject` to let the editor compile.
-
-Enabled plugins: `ModelViewViewModel`, `CommonUI`, `ModelingToolsEditorMode`.
-
-> **Note:** Art and audio content assets are not the focus of this repository and may be partially excluded; the `Source/` C++ framework is the portfolio-relevant part.
-
----
-
 ## Media
 
 <!-- Add gameplay screenshots / GIFs here, e.g.:
