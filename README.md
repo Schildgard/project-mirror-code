@@ -128,7 +128,7 @@ Enabled plugins: `ModelViewViewModel`, `CommonUI`, `ModelingToolsEditorMode`.
 
 ## A note on workflow
 
-This project is developed with **AI-assisted tooling (Claude Code)** under my own documented conventions (`CLAUDE.md`). Architecture, system design and all engineering decisions are mine; the AI is used as a controlled accelerator (boilerplate, refactoring, documentation). Prior solo projects — built long before these tools existed — demonstrate the underlying engineering is my own.
+This project is developed with **AI-assisted tooling (Claude Code)** under my own documented conventions. Architecture, system design and all engineering decisions are mine. the AI is used as a controlled accelerator ( reviewing, refactoring, documentation).
 
 ---
 
