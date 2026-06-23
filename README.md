@@ -7,7 +7,7 @@
 
 I share it publicly as an **engineering portfolio piece**: the focus below is on *how the code is structured*, not on selling a finished game.
 
-> **Status — early development.** This is a vertical-slice / prototype build. Several systems are intentionally still open (see [`Docs/OffenePunkte.txt`](Docs/OffenePunkte.txt)). The value on display here is the **architecture and the discipline around it**, not feature-completeness.
+> **Status — early development.** This is a vertical-slice / prototype build. Several systems are intentionally still open. The value on display here is the **architecture and the discipline around it**, not feature-completeness.
 
 ---
 
