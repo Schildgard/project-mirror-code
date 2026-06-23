@@ -1,6 +1,6 @@
 ================================================================================
   WORLD EVENT SYSTEM — Dokumentation
-  Stand: 2026-06-23 (Inhalt gegen aktuellen Code geprüft, weiterhin gültig)
+  Stand: 2026-06-23
 ================================================================================
 
 ÜBERBLICK
