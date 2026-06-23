@@ -1,0 +1,95 @@
+================================================================================
+  OFFENE PUNKTE — Projektübersicht
+  Stand: 2026-06-23
+================================================================================
+
+
+ARCHITEKTUR / NOCH NICHT IMPLEMENTIERT
+---------------------------------------
+
+1. TransitionPoint/EntryPoint-IDs (SubsystemLevelLoading)
+   Verschiedene Eintrittspunkte pro Level bei Levelwechsel sind noch nicht
+   ausgespielt. Der Spieler spawnt unabhängig vom Transition-Punkt, von dem er
+   kommt. Grundlage ist vorhanden: USubsystemLevelLoading hält bereits ein
+   PendingEntryPoint-Feld inkl. Get/SetPendingEntryPoint — die Auswertung am
+   Ziel-Level fehlt noch.
+
+2. FPlayerConditionData aufteilen (SaveGameData.h)
+   FPlayerConditionData enthält aktuell nur CurrentHP. "Persistent" (Basis-Stats)
+   und "runtime" (inkl. Buffs) sind noch nicht getrennt. Trennung nötig, damit
+   klar ist, was einen SaveGame-Load überlebt und was nicht.
+
+
+CHARACTER / SAVE
+----------------
+
+3. CharacterBase Save-Subscription überschreibt keine Blueprint-Overrides
+   (CharacterBase.cpp:44, @todo-Kommentar Zeile 43)
+   CommandSaveGame.AddUObject bindet direkt auf OnCommandSaveData_Implementation.
+   Blueprint-Subklassen, die die Funktion überschreiben, werden dabei nicht
+   berücksichtigt. Fix: Bindung in eine virtuelle Funktion wrappen.
+
+4. ProvisoricTestStat (CharacterPlayer.h:26)
+   Platzhaltervariable — muss durch ein echtes Stat-System ersetzt werden.
+
+
+SAVEGAME / UI
+-------------
+
+5. FSaveFileSlotData unvollständig (SubsystemSaveAndLoad.h)
+   Enthält bisher nur SaveFileID. Fehlen: Timestamp, Levelname, Screenshot
+   (@todo im Code). Relevant sobald ein Ladescreen-UI gebaut wird.
+
+6. Save-Guard kann schnelle Saves verwerfen (SubsystemSaveAndLoad, bIsSaving)
+   Async-Save + bIsSaving-Guard können überlappende SaveAllData-Aufrufe
+   verwerfen -> die Invariante Memory == Disk kann brechen. Lösung: Pending-Save-
+   Flag, das nach Abschluss des laufenden Saves einen ausstehenden Save nachzieht.
+
+
+AUDIO
+-----
+
+7. BGM Fade-Out-Timer nutzt lokales Handle (SubsystemBgm.cpp:51, @todo)
+   FadeMusicOut (bPauseSound-Pfad) setzt einen Timer mit lokalem FTimerHandle,
+   der auch dann feuert, wenn er nicht mehr gebraucht wird. Der Fall wird in
+   PauseMusicAfterFadeOut über einen Top-Stack-Guard abgefangen; sauberer wäre
+   ein Member-TimerHandle, das aktiv gecancelt werden kann.
+
+8. Footstep: synchrones Laden + hartcodierte Werte (FootstepAudioComponent)
+   RebuildSoundMap lädt Sounds per LoadSynchronous; LineTraceDistance (30 cm)
+   und Trace-Channel sind hartcodiert. Bei Bedarf async + Settings-getrieben.
+
+
+INTERAKTION / LOCK-ON
+---------------------
+
+9. TOCTOU zwischen Interaktions-Trigger und AnimNotify
+   Zwischen TriggerInteraction (Montage-Start + Snap) und dem AnimNotify_Interact,
+   der Interact() ausführt, können mehrere Frames liegen. CurrentInteractable
+   kann sich in dem Fenster ändern. Interact() prüft Gültigkeit erneut (kein
+   ungültiger Zugriff), aber im Extremfall wird mit einem anderen als dem
+   ursprünglich angeschnappten Objekt interagiert. Lösung: Ziel über die
+   Interaktionsdauer locken. (Details: Docs/InteractionSystem.txt)
+
+10. LockOn: Zielpunkt = Actor-Location statt Socket (LockOnComponent.cpp:65, @todo)
+    Für große Gegner ggf. ungenau.
+
+11. LockOn-Interpolationsgeschwindigkeit hartcodiert (LockOnComponent.cpp:68)
+    Wert 10.f direkt im RInterpTo — soll aus den Spielereinstellungen kommen.
+
+
+WELT / OBJEKTE
+--------------
+
+12. InteractableMysteriousMirror: Despawn-Radius (InteractableMysteriousMirror.h, @todo)
+    MirrorDespawnRadius soll für Präzision durch eine Sphere/Box ersetzt werden.
+
+
+WORLD EVENT SYSTEM (Details in Docs/WorldEventSystem.txt)
+---------------------------------------------------------
+
+13. ActivateChildObject (EEventReactionType) unimplementiert
+14. ToggleVisibility + bCheckObjectConditionOnBeginPlay: Default-Mesh-Zustand
+    muss dem "aus"-Zustand entsprechen (implizite Konvention, nicht erzwungen)
+15. bIsOneTimeInteraction=true + bIsStatePersistent=true: redundante
+    Kombination ohne Warning

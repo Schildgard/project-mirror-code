@@ -1,0 +1,150 @@
+================================================================
+INGAME-MENÜ & HUD-INPUT-SYSTEM (aktueller Stand)
+Stand: 2026-06-23
+================================================================
+
+Beschreibt das Zusammenspiel von HUD, Pausemenü und Input-Mode
+(Game vs. UI) auf Basis von CommonUI / CommonActivatableWidgets.
+
+HINWEIS: Frühere Versionen dieser Doku nannten AHUDPlayer,
+UHUDInGame, UWidgetInGameMenu und USettingsWidgetClass. Die
+Klassen heißen jetzt AHUDInGame, UWidgetPlayerHUD,
+UWidgetPauseMenu und USettingsUserInterface.
+
+----------------------------------------------------------------
+ÜBERBLICK
+----------------------------------------------------------------
+
+Das HUD besteht aus einem Layout mit einem ActivatableWidget-Stack
+(GameHUDLayer). Welcher Eintrag den Input-Mode bestimmt, entscheidet
+der CommonUI-ActionRouter anhand des obersten aktiven Widgets im
+Stack:
+
+- Gameplay-HUD oben  -> Game-Input, Maus gecaptured
+- Pausemenü oben     -> nur UI-Input, Maus frei
+
+Beim Schließen des Menüs wird wieder das Gameplay-HUD oberstes
+aktives Widget und stellt den Game-Input her.
+
+----------------------------------------------------------------
+KLASSEN & ROLLEN
+----------------------------------------------------------------
+
+UWidgetHUDLayout (UCommonUserWidget)
+   - Root-HUD-Widget, per AddToPlayerScreen sichtbar.
+   - BindWidget-Stacks (UCommonActivatableWidgetStack):
+       GameHUDLayer -> trägt sowohl das Gameplay-HUD als auch das
+                       Pausemenü (beide werden hier hineingepusht).
+       MenuLayer    -> aktuell ungenutzt (@todo im Code: evtl.
+                       entfernen). Menü liegt derzeit im GameHUDLayer.
+
+UWidgetPlayerHUD (UCommonActivatableWidget)
+   - Wird in BeginPlay in den GameHUDLayer gepusht (Gameplay-HUD).
+   - Überschreibt GetDesiredInputConfig():
+       FUIInputConfig(ECommonInputMode::Game,
+                      EMouseCaptureMode::CapturePermanently)
+   - Quelle des Gameplay-Input-Mode. Solange dieses Widget das
+     oberste aktive ist, läuft normaler Spiel-Input.
+
+UWidgetPauseMenu (UCommonActivatableWidget)
+   - Wird beim Öffnen in den GameHUDLayer gepusht (über das
+     Gameplay-HUD).
+   - Überschreibt GetDesiredInputConfig() EXPLIZIT:
+       FUIInputConfig(ECommonInputMode::Menu,
+                      EMouseCaptureMode::NoCapture)
+     (UI-Input, freier Cursor). HINWEIS: In einer früheren Version
+     wurde bewusst KEINE Config überschrieben und der CommonUI-
+     Default genutzt — jetzt wird die Config explizit gesetzt.
+   - NativeOnInitialized:
+       ReturnToMainMenuButton (Text "Quit")
+           -> USubsystemLevelLoading::ReturnToMainMenu
+       CloseInGameMenuButton (Text "Close")
+           -> AHUDInGame::HideInGameMenu
+   - NativeOnActivated: registriert ein UI-Action-Binding aus
+     InGameMenuInputData (FDataTableRowHandle) -> HideInGameMenu
+     (bDisplayInActionBar = false). Damit lässt sich das Menü mit
+     derselben Taste schließen, mit der es geöffnet wird (siehe FLOW).
+   - NativeOnDeactivated: hebt das Binding wieder auf.
+
+AHUDInGame (AHUD)
+   - BeginPlay: erzeugt HUDLayout aus
+     USettingsUserInterface::HUDLayoutClass, AddToPlayerScreen,
+     pusht UWidgetPlayerHUD in den GameHUDLayer. Erzeugt außerdem
+     den InteractionPrompt (UWidgetTextDisplay, erst bei Bedarf sichtbar).
+   - PushInGameMenu(): pusht UWidgetPauseMenu (aus
+     USettingsUserInterface::InGameMenuClass) in den GameHUDLayer
+     und startet die Menü-Musik (ActivateMenuBgm, siehe BgmSystem.txt).
+   - HideInGameMenu(): holt das aktive Widget des GameHUDLayer und
+     ruft DeactivateWidget() darauf (Stack entfernt es selbst);
+     beendet die Menü-Musik (EndMenuBgm).
+   - OnInteractableChanged(AActor*): zeigt/versteckt den
+     Interaktions-Prompt (Text aus IInteractable::GetInteractionPrompt).
+
+AControllerPlayable (APlayerController)
+   - Bindet OpenMenuAction (ETriggerEvent::Triggered) an
+     AHUDInGame::PushInGameMenu (in SetupPlayerInput).
+   - Verbindet in BindPlayerHUD den OnCurrentInteractableChanged-
+     Delegate der InteractionComponent mit AHUDInGame::OnInteractableChanged.
+
+USettingsUserInterface (UDeveloperSettings, "UI Class Settings",
+                        config=ProjectMirror)
+   - FallbackMenuScreenClass
+   - HUDLayoutClass            -> BP von UWidgetHUDLayout
+   - InGameMenuClass           -> BP von UWidgetPauseMenu
+   - InteractionPromptWidgetClass -> BP von UWidgetTextDisplay
+   - DefaultMenuButtonClass / DefaultMenuButtonStyle / FocusMenuButtonStyle
+   - SavingThrobberClass
+
+----------------------------------------------------------------
+FLOW: ÖFFNEN / SCHLIESSEN
+----------------------------------------------------------------
+
+Öffnen:
+   1. Menü-Taste -> Enhanced Input OpenMenuAction (Game-Input aktiv,
+      weil UWidgetPlayerHUD oberstes aktives Widget ist).
+   2. AHUDInGame::PushInGameMenu pusht UWidgetPauseMenu in GameHUDLayer
+      + ActivateMenuBgm.
+   3. UWidgetPauseMenu wird oberstes aktives Widget -> Input-Mode
+      wechselt auf Menu + NoCapture (Cursor frei, Game-Input unterdrückt).
+
+Schließen (zwei Wege, beide enden in DeactivateWidget):
+   a) Close-Button -> AHUDInGame::HideInGameMenu -> DeactivateWidget
+   b) Menü-Taste erneut -> das in NativeOnActivated registrierte
+      UI-Action-Binding -> HideInGameMenu -> DeactivateWidget
+      (Wichtig: im Menu-Mode ist der Game-Input unterdrückt, deshalb
+      feuert OpenMenuAction NICHT mehr. Das Schließen läuft daher
+      bewusst über das UI-Action-Binding, nicht über einen Toggle.)
+   -> Stack entfernt das deaktivierte Widget. UWidgetPlayerHUD ist
+      wieder oberstes aktives Widget -> Input-Mode zurück auf
+      Game + CapturePermanently. EndMenuBgm stellt die vorherige
+      Musik/Ambient wieder her.
+
+----------------------------------------------------------------
+HINWEIS: INPUT-MODE-AUFLÖSUNG (CommonUI-Interna)
+----------------------------------------------------------------
+
+- Der CommonUIActionRouter wählt den aktiven Root-Node nach höchstem
+  Paint-Layer/obersten aktiven Widget und wendet dessen
+  GetDesiredInputConfig an.
+- Hier liefern BEIDE relevanten Widgets explizit eine Config:
+  UWidgetPlayerHUD -> Game + CapturePermanently,
+  UWidgetPauseMenu -> Menu + NoCapture.
+- Beim Schließen wird UWidgetPlayerHUD wieder oberstes aktives Widget
+  und dessen Game-Config angewendet.
+
+----------------------------------------------------------------
+SETUP / BLUEPRINT-SEITE (manuell im Editor)
+----------------------------------------------------------------
+
+- HUDLayoutClass: BP von UWidgetHUDLayout mit dem
+  CommonActivatableWidgetStack GameHUDLayer (BindWidget). MenuLayer
+  ist aktuell ungenutzt.
+- InGameMenuClass: BP von UWidgetPauseMenu mit den Buttons
+  ReturnToMainMenuButton + CloseInGameMenuButton; InGameMenuInputData
+  auf die passende DataTable-Row gesetzt.
+- DT_IngameMenuInputs: CommonUI-Input-Action-Data, auf dieselbe Taste
+  gebunden wie OpenMenuAction (Schließen-Taste im Menü).
+- ControllerPlayable-BP: OpenMenuAction zuweisen.
+- Project Settings -> UI Class Settings: HUDLayoutClass,
+  InGameMenuClass, InteractionPromptWidgetClass etc. setzen.
+================================================================

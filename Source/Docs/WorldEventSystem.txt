@@ -1,0 +1,202 @@
+================================================================================
+  WORLD EVENT SYSTEM — Dokumentation
+  Stand: 2026-06-23 (Inhalt gegen aktuellen Code geprüft, weiterhin gültig)
+================================================================================
+
+ÜBERBLICK
+---------
+Das WorldEvent-System verbindet Interactables (vom Spieler auslösbar) mit
+Triggerables (reagieren auf Events). Es unterstützt Same-Level-Kommunikation
+via Delegates sowie Cross-Level-Persistenz via SaveGame.
+
+Beteiligte Klassen:
+  - AInteractableObjectBase   (Source/ProjectMirror/Objects/)
+  - ATriggerableObject        (Source/ProjectMirror/GameWorld/)
+  - USubsystemObjectEvents    (Source/ProjectMirror/GameWorld/)
+  - USubsystemSaveAndLoad     (Source/ProjectMirror/SaveSystem/)
+  - USubsystemLevelLoading    (Source/ProjectMirror/)
+  - USaveGameData             (Source/ProjectMirror/SaveSystem/)
+
+
+================================================================================
+KERNKONZEPTE
+================================================================================
+
+EventID (FName)
+  Jedes Interactable hat eine EventID. Wenn der Spieler interagiert, wird diese
+  ID durchs System gefeuert. Triggerables hören auf bestimmte IDs und reagieren.
+
+ActivatedObjects (TArray<FName>)  —  im USubsystemObjectEvents
+  Persistente Liste von EventIDs deren Zustand gespeichert ist. Wird NIE
+  vollständig geleert — nur per SaveGame gespeichert und geladen. Grundlage für
+  Cross-Level-Persistenz. UpdateObjectStatusInActivatedObjects löst jeweils
+  sofort SaveAllData() aus, sodass Memory und Disk immer synchron sind.
+
+ObjectEventListenerMap (TMap<FName, FSimpleMulticastDelegate>)  —  im USubsystemObjectEvents
+  Same-Level-Delegate-Map. Triggerables registrieren sich hier. Wird bei jedem
+  Levelwechsel geleert (EmptyObjectEventListenerMap), da die Objekte des alten
+  Levels nicht mehr existieren.
+
+
+================================================================================
+KLASSEN IM DETAIL
+================================================================================
+
+AInteractableObjectBase
+-----------------------
+Flags:
+  bIsInteractionPossible (VisibleAnywhere, kein Designwert)
+      Laufzeit-Zustand. Gibt an ob aktuell interagiert werden kann.
+      Wird vom System gesetzt, nicht vom Designer.
+
+  bIsOneTimeInteraction (default=true)
+      Wenn true: nur einmal interagierbar, danach dauerhaft gesperrt (auch nach
+      Reload). Der Interactable weiß nur, dass er einmal verwendbar ist — dass
+      er dadurch zwingend persistent ist, ist eine Konsequenz des Toggle-
+      Mechanismus (s.u.), kein separates Flag.
+
+BeginPlay-Verhalten:
+  Wenn bIsOneTimeInteraction=true und die EventID bereits in ActivatedObjects:
+  → bIsInteractionPossible=false. Das Interactable bleibt nach Reload gesperrt.
+
+OnInteract-Verhalten (Reihenfolge):
+  1. Guard: EventID.IsNone() → früher Abbruch
+  2. Guard: !bIsInteractionPossible → Abbruch mit Log
+  3. Wenn bIsOneTimeInteraction: bIsInteractionPossible=false
+  4. UpdateObjectStatusInActivatedObjects(EventID) — togglet den Zustand
+     (EventID in Liste → entfernen; nicht in Liste → hinzufügen)
+     Für OneShot ist die EventID beim ersten Aufruf garantiert nicht in der
+     Liste (BeginPlay-Guard würde sonst sperren), also wird immer addiert.
+     Für nicht-OneShot togglet die EventID bei jeder Interaktion.
+  5. FireObjectEvent(EventID) → Delegate-Broadcast an Triggerables im selben Level
+
+
+ATriggerableObject
+------------------
+EventMap (TMap<FName, FEventReactionConfig>):
+  Jeder Eintrag verbindet eine EventID mit einer Reaktionskonfiguration.
+  Pro Triggerable können mehrere EventIDs mit unterschiedlichem Verhalten
+  konfiguriert werden.
+
+FEventReactionConfig:
+  EventReaction (EEventReactionType)         — Was das Objekt tut wenn getriggert.
+  bCheckObjectConditionOnBeginPlay (default=false)
+      Wenn true: prüft in BeginPlay ob die EventID in ActivatedObjects ist.
+      Wenn ja: führt die Reaktion sofort aus (Zustand aus vorheriger Session
+      wiederherstellen). Dies ist das einzige Persistenz-Flag auf Triggerable-
+      Seite — ob der Zustand überlebt hängt davon ab, ob die EventID in
+      ActivatedObjects ist (kontrolliert durch das Interactable).
+  bRegisterOnEvent (default=true)
+      Wenn true: bindet ein WeakLambda an den Delegate im SubsystemObjectEvents.
+      Reagiert live wenn das Event im selben Level gefeuert wird.
+
+Beide Flags sind pro EventMap-Eintrag unabhängig konfigurierbar:
+  - Nur bCheckObjectConditionOnBeginPlay=true: nur History, keine Live-Reaktion.
+  - Nur bRegisterOnEvent=true: nur Live-Reaktion, ignoriert History.
+  - Beide true: reagiert auf beides. Achtung bei nicht-idempotenten Reaktionen
+    (z.B. ToggleVisibility): default Mesh-Zustand muss dem "aus"-Zustand
+    entsprechen, da BeginPlay beim Wiederherstellen einmal toggled.
+  - Beide false: Warning im Log, Entry wird übersprungen.
+
+Sanity-Checks in BeginPlay:
+  - Leere EventMap → Warning + return
+  - Eintrag mit beiden Flags false → Warning + continue (pro Entry)
+
+EEventReactionType (EnumCollection.h):
+  BecomeVisible       — Mesh sichtbar + Kollision aktiv
+  BecomeHidden        — Mesh unsichtbar + Kollision deaktiviert
+  ToggleVisibility    — Wechselt Sichtbarkeit und Kollision je nach aktuellem Zustand
+  ChangeScale         — Setzt Actor-Scale auf 20 (Platzhalterwert)
+  ActivateChildObject — (@todo, noch nicht implementiert)
+
+
+USubsystemObjectEvents
+--------------------
+Öffentliche API:
+  FindOrRegisterObjectEventListener(FName) → FSimpleMulticastDelegate*
+      Gibt den Delegate für eine EventID zurück, legt ihn an falls nicht vorhanden.
+      Wird von Triggerables in BeginPlay aufgerufen.
+
+  FireObjectEvent(FName)
+      Broadcastet den Delegate für eine EventID, falls registriert.
+      Wird von Interactables bei Interaktion aufgerufen.
+
+  UpdateObjectStatusInActivatedObjects(FName)
+      Togglet den Zustand der EventID in der persistenten Liste:
+      In Liste → entfernen. Nicht in Liste → hinzufügen (AddUnique).
+      Löst sofort SaveAllData() aus → Memory == Disk.
+
+  IsObjectActivated(FName) → bool
+      Prüft ob eine EventID in ActivatedObjects ist.
+
+  EmptyObjectEventListenerMap()
+      Leert die Delegate-Map. Wird bei Levelwechsel aufgerufen.
+      ActivatedObjects bleibt dabei unberührt.
+
+  PreloadActivatedObjectsFromSaveGame(USaveGameData*)
+      Lädt ActivatedObjects direkt aus einem SaveGame-Objekt in den Memory.
+      Wird vor OpenLevel aufgerufen damit TriggerableObjects in BeginPlay den
+      korrekten State sehen.
+
+ISaveable-Implementierung:
+  OnCommandSaveData: schreibt ActivatedObjects in FWorldEventData → USaveGameData
+  OnCommandLoadData: liest ActivatedObjects aus USaveGameData
+
+
+================================================================================
+FLOWS
+================================================================================
+
+Neues Spiel (StartNewGame)
+--------------------------
+1. FirstLevel lädt
+2. TriggerableObjects BeginPlay: ActivatedObjects leer → nichts triggert
+3. Interactables BeginPlay: alle interagierbar
+4. OnPostNewGameLevelLoad → SaveAllData() → neuer Slot mit leeren Daten
+
+Levelwechsel (EnterNewLevel)
+----------------------------
+1. OnLevelTransitionStart → Player cached Zustand (inkl. Buffs)
+2. SaveAllData() → aktueller Stand auf Disk (Memory == Disk)
+3. EmptyObjectEventListenerMap() → alte Level-Delegates entfernt
+4. OpenLevel()
+5. Neues Level lädt → TriggerableObjects BeginPlay prüfen Memory-ActivatedObjects
+   (korrekt, da Memory == Disk durch Schritt 2)
+6. OnPostChangedLevel:
+   a. OnLevelTransitionEnd → Player stellt Zustand aus Cache wieder her
+   b. LoadLevelData() → CommandLoadLevelData → Level-Objekte laden Zustand
+      (für SubsystemObjectEvents redundant, notwendig für andere Subscriber)
+   c. SaveAllData() → neues Level + neue Spielerposition gespeichert
+
+SaveGame laden (LoadSlotByID)
+-----------------------------
+1. SaveGame von Disk laden → CurrentSaveGameID setzen
+2. LoadLevelFromSaveGame():
+   a. EmptyObjectEventListenerMap()
+   b. PreloadActivatedObjectsFromSaveGame() → ActivatedObjects korrekt im Memory
+   c. OpenLevel()
+3. Level lädt → TriggerableObjects BeginPlay prüfen Memory-ActivatedObjects (korrekt)
+4. OnPostLevelLoad:
+   a. CommandLoadLevelData → SubsystemObjectEvents lädt ActivatedObjects nochmals
+      (redundant, aber notwendig für andere Subscriber wie Truhen etc.)
+   b. OnLevelLoadedFromSaveGame → Player bekommt Transform + Basis-Stats
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. ToggleVisibility + bCheckObjectConditionOnBeginPlay
+   Beim Wiederherstellen des Toggle-Zustands in BeginPlay wird Execute_OnTriggered
+   mit ToggleVisibility aufgerufen. Das funktioniert nur korrekt wenn der
+   Default-Mesh-Zustand des Actors dem "aus"-Zustand entspricht. Ist der Mesh im
+   Editor standardmäßig sichtbar, wird der Zustand falsch wiederhergestellt.
+   Konvention: Mesh-Default muss immer dem "aus"-Zustand entsprechen.
+
+2. ActivateChildObject (EEventReactionType)
+   Ist als Enum-Wert vorhanden, aber in OnTriggered_Implementation nicht
+   implementiert (@todo-Kommentar im Code).
+
+3. [BEHOBEN 2026-06-12] InteractableObjectBase::BeginPlay Guard für EventID.IsNone()
+   BeginPlay prüft nun `bIsOneTimeInteraction && !EventID.IsNone()` vor dem
+   Subsystem-Zugriff.

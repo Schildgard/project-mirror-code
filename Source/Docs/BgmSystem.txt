@@ -1,0 +1,159 @@
+================================================================================
+  BGM / AMBIENT-SOUND-SYSTEM — Dokumentation
+  Stand: 2026-06-23
+================================================================================
+
+ÜBERBLICK
+---------
+USubsystemBgm verwaltet Hintergrundmusik (BGM) und Ambient-Sound als zwei
+getrennte, stack-basierte Audio-Schichten. Sounds werden asynchron geladen,
+per Crossfade ein-/ausgeblendet und überleben als Stack einen vorübergehenden
+Wechsel (z.B. Menü-Musik) ohne ihren Zustand zu verlieren.
+
+Beteiligte Klassen / Daten:
+  - USubsystemBgm      (Source/ProjectMirror/GameWorld/)   GameInstanceSubsystem
+  - USettingsSound     (Source/ProjectMirror/Settings/)    DeveloperSettings
+  - AHUDInGame         (Source/ProjectMirror/UI/)          Menü-Musik-Trigger
+  - ESoundCategory     (Utility/EnumCollection.h)          BackgroundMusic | AmbientSound
+
+
+================================================================================
+KERNKONZEPTE
+================================================================================
+
+Zwei Stacks (TArray<TObjectPtr<UAudioComponent>>)
+  MusicStack    — Hintergrundmusik
+  AmbientStack  — Ambient-Sound
+  Der jeweils oberste Eintrag (Top) ist der aktuell hörbare Track. Darunter
+  liegende Komponenten sind pausiert und warten darauf, wieder aufgenommen zu
+  werden (Resume). GetAudioStack(Category) liefert den passenden Stack.
+
+FadingOutAudioComponents (TArray)
+  Zwischenspeicher für Komponenten, die gerade ausgeblendet werden. Verhindert,
+  dass eine noch fadende Komponente vorzeitig zerstört oder doppelt behandelt
+  wird, bis ihr Fade abgeschlossen ist.
+
+FadeDuration (float, default 3.0)
+  Wird in Initialize aus USettingsSound::SoundFadeDuration übernommen.
+
+Level-getriebene Track-Auswahl
+  USettingsSound hält zwei Maps:
+    LevelMusicMap   : TSoftObjectPtr<UWorld> -> TSoftObjectPtr<USoundBase>
+    LevelAmbientMap : TSoftObjectPtr<UWorld> -> TSoftObjectPtr<USoundBase>
+  Beim Laden eines Levels wird anhand des (PIE-normalisierten) World-Pfads der
+  passende Track nachgeschlagen und asynchron geladen.
+
+
+================================================================================
+LIFECYCLE / DELEGATES
+================================================================================
+
+Initialize
+  - Bindet an FCoreUObjectDelegates::PreLoadMap        -> OnPreLoadLevel
+  - Bindet an FCoreUObjectDelegates::PostLoadMapWithWorld -> OnPostLevelLoad
+  - Liest FadeDuration aus USettingsSound.
+
+Deinitialize
+  - Entfernt beide Delegate-Bindungen wieder.
+
+OnPreLoadLevel (vor jedem Levelwechsel)
+  Räumt beide Stacks auf (CleanUpStacksAndComponentsForLevelTransition):
+  pausierte Komponenten werden sofort zerstört, der aktuell spielende Track wird
+  per FadeOutAndDestroy ausgeblendet und danach zerstört. Die Audiokomponenten
+  des alten Levels sollen nicht in das neue Level hineinleben.
+
+OnPostLevelLoad (nach jedem Levelwechsel)
+  Schlägt Music- und Ambient-Track für die geladene World nach
+  (LevelMusicMap / LevelAmbientMap) und startet für jeden gefundenen,
+  nicht-null Eintrag LoadSoundAsyncFromSoftPtr.
+
+
+================================================================================
+ABLAUF: NEUEN SOUND EINBLENDEN
+================================================================================
+
+LoadSoundAsyncFromSoftPtr(SoftPtr, Category, bPausePreviousSound)
+  1. Merkt sich die anfordernde World als TWeakObjectPtr.
+  2. Fordert den Sound asynchron über den StreamableManager an.
+  3. Callback -> OnPostSoundLoaded.
+
+OnPostSoundLoaded(LoadedSound, Category, bPausePreviousSound, RequestedWorld)
+  1. GUARD: Wenn RequestedWorld ungültig ist oder nicht mehr der aktuellen World
+     entspricht -> return. (Schützt vor verspäteten Async-Callbacks nach einem
+     Levelwechsel — der Sound des alten Levels wird verworfen.)
+  2. GUARD: ungültiger Sound oder Category == Undefined -> return.
+  3. Erzeugt eine neue UAudioComponent (CreateSound2D, bAutoDestroy=false).
+  4. Blendet den neuen Sound ein (FadeMusicIn, bWasSoundPaused=false).
+  5. Ist bereits ein Track im Stack: blendet den bisherigen Top-Track aus
+     (FadeMusicOut mit bPauseSound = bPausePreviousSound).
+  6. Pusht den neuen Track auf den Stack (wird neuer Top).
+
+
+================================================================================
+ABLAUF: AUSBLENDEN — PAUSE vs. DESTROY
+================================================================================
+
+FadeMusicOut(Target, bPauseSound, Category)
+  Fall bPauseSound == true  (Track soll später fortgesetzt werden):
+    - Target nach FadingOutAudioComponents, AdjustVolume auf ~0 über FadeDuration.
+    - Timer (FadeDuration) -> PauseMusicAfterFadeOut. Der Track bleibt im Stack.
+    @todo (Code): Timer feuert auch dann, wenn er nicht mehr gebraucht wird;
+          Lösung wäre ein Member-TimerHandle (siehe Offene Punkte).
+
+  Fall bPauseSound == false (Track wird endgültig entfernt):
+    - Aus dem Stack entfernen, FadeOutAndDestroy, danach den darunterliegenden
+      Track wieder aufnehmen (ResumeMusicAfterFadeOut).
+
+PauseMusicAfterFadeOut(WeakAudio, Category)
+  - Holt die Komponente aus dem WeakPtr (return wenn weg).
+  - Aus FadingOutAudioComponents entfernen.
+  - GUARD: Ist die Komponente inzwischen wieder Top eines Stacks (sie wurde
+    während des Fades erneut aktiviert), NICHT pausieren -> return.
+  - Sonst: OnAudioFinishedNative-Bindung lösen und SetPaused(true).
+
+FadeOutAndDestroy(Finished)
+  - Nach FadingOutAudioComponents, FadeOut über FadeDuration, danach
+    OnMusicFadeOutFinished -> Bindung lösen, aus Liste entfernen,
+    DestroyComponent.
+
+FadeMusicIn(Target, bWasSoundPaused)
+  - bWasSoundPaused == true : SetPaused(false) + AdjustVolume auf 1 (Resume).
+  - bWasSoundPaused == false: FadeIn von 0 auf 1 (neuer Track).
+
+ResumeMusicAfterFadeOut(Category)
+  - Nimmt den Top-Track des Stacks und blendet ihn als pausierten Track wieder
+    ein (FadeMusicIn mit bWasSoundPaused=true). No-op bei leerem Stack.
+
+
+================================================================================
+ANWENDUNGSFALL: MENÜ-MUSIK (AHUDInGame)
+================================================================================
+
+Beim Öffnen des Pausenmenüs (ActivateMenuBgm):
+  - Lädt die Menü-Musik (USettingsSound::IngGameMenuMusic) mit
+    bPausePreviousSound=true -> bisherige BGM wird pausiert, nicht zerstört,
+    und liegt damit weiterhin im MusicStack.
+  - Blendet zusätzlich den aktuellen Ambient-Track aus (pausiert).
+
+Beim Schließen (EndMenuBgm):
+  - Blendet die Menü-Musik endgültig aus (bPauseSound=false) -> beim Entfernen
+    wird der darunterliegende (pausierte) Gameplay-Track automatisch wieder
+    aufgenommen.
+  - Nimmt den Ambient-Track wieder auf (ResumeMusicAfterFadeOut).
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. Timer-Handle in FadeMusicOut (bPauseSound-Pfad)
+   Der SetTimer-Aufruf nutzt ein lokales FTimerHandle. Der Timer feuert auch
+   dann noch, wenn die pausierte Komponente zwischenzeitlich wieder aktiviert
+   wurde — PauseMusicAfterFadeOut fängt diesen Fall zwar über den Top-Stack-
+   Guard ab, aber sauberer wäre ein Member-TimerHandle, das aktiv gecancelt
+   werden kann. (@todo im Code, FadeMusicOut.)
+
+2. [HISTORISCH/BEHOBEN] Pausemenü-Levelwechsel-Crash
+   Ein früherer Crash beim Levelwechsel aus dem Pausemenü (dangling Raw-Pointer
+   im Timer-Payload) wurde durch Verwendung von TWeakObjectPtr im
+   PauseMusicAfterFadeOut-Payload behoben.

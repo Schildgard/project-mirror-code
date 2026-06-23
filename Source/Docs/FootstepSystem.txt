@@ -1,0 +1,105 @@
+================================================================================
+  FOOTSTEP-AUDIO-SYSTEM — Dokumentation
+  Stand: 2026-06-23
+================================================================================
+
+ÜBERBLICK
+---------
+UFootstepAudioComponent spielt oberflächenabhängige Schrittgeräusche ab. Beim
+Schritt wird per Line-Trace nach unten das Physical Material des Bodens ermittelt
+und der passende Sound gesetzt. Welche Sounds für welche Oberfläche gelten, hängt
+am Kreaturentyp (z.B. barfuß/humanoid vs. gepanzert) und wird zentral in den
+Sound-Settings konfiguriert.
+
+Beteiligte Klassen / Daten:
+  - UFootstepAudioComponent  (Source/ProjectMirror/Characters/Components/)  UAudioComponent
+  - ACharacterBase           (Source/ProjectMirror/Characters/)             liefert CreatureType
+  - USettingsSound           (Source/ProjectMirror/Settings/)               FootstepAudioMap
+  - FFootstepSurfaceSounds   (Utility/FootstepSurfaceSounds.h)              Surface->Sound-Map
+  - ECreatureType            (Utility/EnumCollection.h)                     Humanoid_Normal | Humanoid_Armored | ...
+  - AnimNotify_Footstep      (Source/ProjectMirror/Animation/)             Auslöser pro Schritt
+
+
+================================================================================
+KERNKONZEPTE
+================================================================================
+
+Komponente ist selbst eine UAudioComponent
+  UFootstepAudioComponent erbt direkt von UAudioComponent (bAutoActivate=false).
+  Der abzuspielende Sound wird in das geerbte Feld `Sound` gesetzt und per Play()
+  ausgelöst. In ACharacterBase wird die Komponente an den Mesh-Socket "Root"
+  attached.
+
+CachedFootstepSoundMap (TMap<EPhysicalSurface, USoundBase*>)
+  Pro Kreaturentyp aufgelöste Sounds, einmal aus den Settings geladen und
+  gecacht, damit zur Laufzeit kein erneutes Asset-Loading pro Schritt nötig ist.
+
+CurrentSurfaceType (EPhysicalSurface, default SurfaceType1)
+  Zuletzt erkannte Oberfläche. Dient als Cache: nur wenn sich die Oberfläche
+  ändert, wird der Sound umgesetzt.
+
+Konfiguration (USettingsSound::FootstepAudioMap)
+  TMap<ECreatureType, FFootstepSurfaceSounds>
+  FFootstepSurfaceSounds enthält wiederum eine Map
+  EPhysicalSurface -> TSoftObjectPtr<USoundBase>.
+  Daten-getrieben: neue Oberflächen/Kreaturentypen ohne Code-Änderung möglich.
+
+
+================================================================================
+ABLAUF
+================================================================================
+
+BeginPlay
+  - Ermittelt den CreatureType des Owners (ACharacterBase::GetCreatureType,
+    Fallback Humanoid_Normal).
+  - RebuildSoundMap(CreatureType).
+
+RebuildSoundMap(CreatureType)
+  - Holt FootstepAudioMap[CreatureType] aus den Settings.
+  - Lädt alle Surface-Sounds (LoadSynchronous) in CachedFootstepSoundMap.
+  - Setzt `Sound` initial auf den Eintrag für CurrentSurfaceType, falls vorhanden.
+  Hinweis: Aktuell synchrones Laden beim Aufbau der Map (einmalig, nicht pro
+  Schritt).
+
+PlayFootstepAudio  (vom AnimNotify_Footstep pro Schritt aufgerufen)
+  1. CheckSurfaceAndSetSound() — Oberfläche prüfen, ggf. Sound wechseln.
+  2. Wenn `Sound` gültig: Play().
+
+CheckSurfaceAndSetSound
+  - Line-Trace von der Komponentenposition LineTraceDistance (30 cm) nach unten.
+  - Liest aus dem HitResult das PhysMaterial -> SurfaceType.
+  - Ist der SurfaceType unverändert -> return (kein unnötiger Wechsel).
+  - Sonst ChangeSurfaceType(NewSurfaceType).
+
+ChangeSurfaceType(NewSurfaceType)
+  - Schlägt den Sound für die neue Oberfläche in CachedFootstepSoundMap nach.
+  - Nur bei gültigem Treffer: `Sound` umsetzen und CurrentSurfaceType aktualisieren.
+
+OnCreatureTypeChanged(NewCreatureType)
+  - Baut die Sound-Map neu auf (RebuildSoundMap). Vorgesehen für Fälle, in denen
+    sich der Kreaturentyp zur Laufzeit ändert (z.B. Rüstung an/aus).
+
+
+================================================================================
+SETUP / VORAUSSETZUNGEN
+================================================================================
+
+- Boden-Materialien müssen ein Physical Material mit gesetztem SurfaceType haben,
+  und der verwendete Trace-Channel muss "Trace Complex"/PhysMaterial liefern.
+- USettingsSound::FootstepAudioMap muss pro genutztem ECreatureType eine
+  FFootstepSurfaceSounds-Map mit den relevanten Oberflächen enthalten.
+- Im AnimMontage/AnimSequence die AnimNotify_Footstep-Notifies an den
+  Aufsetz-Frames der Füße platzieren.
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. Synchrones Laden in RebuildSoundMap (LoadSynchronous). Einmalig beim
+   Aufbau; bei vielen/großen Footstep-Assets ggf. auf async umstellen.
+
+2. LineTraceDistance ist hartcodiert (30 cm). Für sehr große/kleine Kreaturen
+   evtl. über Settings konfigurierbar machen.
+
+3. Fester Trace-Channel (TraceTypeQuery1). Bei Bedarf konfigurierbar machen.

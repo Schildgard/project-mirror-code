@@ -1,0 +1,171 @@
+================================================================================
+  INTERAKTIONS- & FOKUS-/LOCK-ON-SYSTEM — Dokumentation
+  Stand: 2026-06-23
+================================================================================
+
+ÜBERBLICK
+---------
+Das Interaktionssystem erlaubt dem Spieler, mit Objekten in Reichweite zu
+interagieren. Die eigentliche Interaktion ist animationsgetrieben: ein Tastendruck
+startet eine Montage, der Charakter snappt auf das Zielobjekt, und ein AnimNotify
+löst die Interaktion framegenau im richtigen Animationsmoment aus.
+
+Das Lock-On-/Fokus-System ist verwandt (gleiche Idee „Ziel in Reichweite
+auswählen"), aber technisch getrennt: es richtet Kamera und Charakter auf ein
+fokussierbares Ziel aus.
+
+Beteiligte Klassen:
+  - UInteractionComponent  (Source/ProjectMirror/)                 SceneComponent
+  - IInteractable          (Source/ProjectMirror/Interfaces/)      Interface
+  - ACharacterBase         (Source/ProjectMirror/Characters/)      TriggerInteraction()
+  - UAnimInstanceSimple    (Source/ProjectMirror/Animation/)       Montage-Handling
+  - UAnimNotify_Interact   (Source/ProjectMirror/Animation/)       framegenauer Trigger
+  - AControllerPlayable    (Source/ProjectMirror/)                 Setup + Input-Binding
+  - AHUDInGame             (Source/ProjectMirror/UI/)              Interaktions-Prompt
+  - ULockOnComponent       (Source/ProjectMirror/)                 ActorComponent
+  - IFocusable             (Source/ProjectMirror/Interfaces/)      Interface
+
+
+================================================================================
+KOMPONENTEN-SETUP (Laufzeit-Komposition)
+================================================================================
+
+AControllerPlayable::OnPossess fügt dem Pawn zur Laufzeit Komponenten hinzu
+(AddComponentByClass):
+  - SetupCameraComponent      (SpringArm + Camera, Werte aus USettingsCharacter)
+  - SetupLockOnComponent      (ULockOnComponent + Input-Bindings)
+  - SetupInteractionComponent (UInteractionComponent als Instanz-Komponente)
+  - BindPlayerHUD             (verbindet Interaktions-Delegate mit dem HUD)
+
+Input (SetupPlayerInput):
+  - InteractAction  -> ACharacterBase::TriggerInteraction
+  - LockOnAction    -> ULockOnComponent::ToggleLockOn
+  - SwitchLockOnTargetAction -> ULockOnComponent::SwitchLockOnTarget
+
+
+================================================================================
+UInteractionComponent
+================================================================================
+
+Aufbau:
+  - Enthält eine USphereComponent (Radius aus USettingsCharacter::InteractionRadius).
+  - InteractablesInRange : TArray<AActor*>  — alle gültigen Interactables im Radius.
+  - CurrentInteractable  : AActor*          — das aktuell ausgewählte Ziel.
+  - Delegates: OnRadiusEnter, OnRadiusExit, OnCurrentInteractableChanged.
+
+Radius-Eintritt (RegisterRadiusEnter):
+  1. GUARD: OtherActor muss UInteractable implementieren.
+  2. GUARD: IInteractable::IsInterActionPossible muss true sein.
+  3. Bindet sich an den OnInteractionDisabled-Delegate des Interactables
+     (damit ein deaktiviertes Objekt sich selbst aus der Liste entfernt).
+  4. AddInteractable + OnRadiusEnter.Broadcast.
+
+Radius-Austritt (RegisterRadiusExit):
+  - RemoveInteractable + OnRadiusExit.Broadcast.
+
+Auswahl des aktuellen Ziels:
+  - AddInteractable: ist noch kein CurrentInteractable gesetzt, wird das neue
+    Objekt zum CurrentInteractable (+ Broadcast).
+  - RemoveInteractable: war das entfernte Objekt das aktuelle, wird per
+    UGameplayStatics::FindNearestActor das nächstgelegene verbleibende Objekt
+    gewählt (oder nullptr) (+ Broadcast).
+
+HUD-Anbindung:
+  OnCurrentInteractableChanged -> AHUDInGame::OnInteractableChanged:
+  zeigt/versteckt den Interaktions-Prompt (Text aus
+  IInteractable::GetInteractionPrompt).
+
+
+================================================================================
+IInteractable (Interface)
+================================================================================
+
+  OnInteract()                         — führt die Interaktion aus.
+  GetInteractionPrompt() -> FName      — Prompt-Text fürs HUD.
+  IsInterActionPossible() -> bool      — darf aktuell interagiert werden?
+  GetInteractionCategory() -> EInteractionCategory
+                                       — Talk/Interact/Push/Take/Open/Close.
+  GetInteractionSnapTargetComponent() -> USceneComponent*
+                                       — Zielpunkt fürs Heranschnappen.
+  GetOnInteractionDisabledDelegate() -> FOnInteractionDisabled&
+                                       — meldet „dieses Interactable ist jetzt aus".
+
+
+================================================================================
+ABLAUF: ANIMATIONSGETRIEBENE INTERAKTION
+================================================================================
+
+ACharacterBase::TriggerInteraction()
+  1. Holt die UInteractionComponent.
+  2. Fragt GetCurrentInteractionType() ab. Ist sie Undefined (kein Ziel)
+     -> direkter Fallback auf InteractionComponent->Interact() (Schritt unten).
+  3. Holt die UAnimInstanceSimple vom Mesh.
+     - Läuft bereits eine Interaktions-Animation (bIsInteractionAnimPlaying)
+       -> return (kein doppelter Trigger).
+     - TryPlayInteractAnimationMontage():
+         * spielt die InteractionAnimMontage,
+         * bei Erfolg: InteractionComponent->SnapActorToCurrentInteractable()
+           (Position + Yaw auf das Snap-Target ausrichten) und return.
+  4. Schlägt das Abspielen der Montage fehl (keine Montage gesetzt o.ä.)
+     -> Fallback: InteractionComponent->Interact() wird sofort aufgerufen.
+
+UAnimNotify_Interact::Notify  (im richtigen Frame der Montage)
+  - Holt die UInteractionComponent des Owners und ruft Interact() auf.
+  -> So passiert die eigentliche Interaktion synchron zur Animation
+     (z.B. genau wenn die Hand das Objekt berührt).
+
+UInteractionComponent::Interact()
+  - GUARD: CurrentInteractable gültig.
+  - GUARD: IInteractable::IsInterActionPossible.
+  - IInteractable::OnInteract(CurrentInteractable).
+
+
+================================================================================
+LOCK-ON / FOKUS (ULockOnComponent)
+================================================================================
+
+ToggleLockOn:
+  - Ist bereits ein Ziel fokussiert -> IFocusable::OnFocusLost, Fokus lösen,
+    Strafing aus.
+  - Sonst: ScanForValidTargets (SphereTraceMulti, Radius 750), nächstes Ziel
+    per FindNearestActor wählen, FocusOnTarget + Strafing an.
+
+FocusOnTarget(Target):
+  - FocusedTarget setzen, IFocusable::OnFocused(Target).
+
+TickComponent (nur bei aktivem Fokus):
+  - Berechnet FindLookAtRotation von Kamera(-arm) zum Ziel,
+    interpoliert die Controller-Rotation per RInterpTo dorthin,
+    richtet den Charakter (nur Yaw) aus.
+
+SwitchLockOnTarget(InputValue):
+  - Nur bei aktivem Fokus. Wählt unter den gültigen Zielen das nächste links
+    bzw. rechts (anhand der lokalen Relativposition Y, X>0 = vor dem Spieler).
+
+ScanForValidTargets:
+  - SphereTraceMultiForObjects auf ValidObjectTypes (GameTraceChannel1).
+  - Filtert auf Actor, die IFocusable implementieren; dedupliziert.
+
+IFocusable: OnFocused() / OnFocusLost() — Hooks für visuelles Feedback am Ziel.
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. TOCTOU zwischen Trigger und AnimNotify
+   Zwischen TriggerInteraction (Montage-Start, Snap) und dem AnimNotify, der
+   Interact() ausführt, vergehen mehrere Frames. Theoretisch kann sich
+   CurrentInteractable in diesem Fenster ändern (Ziel verlässt Radius, anderes
+   Objekt wird näher). Interact() prüft Gültigkeit und IsInterActionPossible
+   erneut, sodass kein ungültiger Zugriff entsteht — es kann aber im Extremfall
+   mit einem anderen als dem ursprünglich „angeschnappten" Objekt interagiert
+   werden. Robuste Lösung: das zum Trigger-Zeitpunkt gewählte Ziel über die
+   Interaktionsdauer „locken".
+
+2. LockOn: Zielpunkt = Actor-Location
+   FindLookAtRotation nutzt die Actor-Location statt eines Sockets/Bones
+   (@todo im Code). Für große Gegner ggf. ungenau.
+
+3. LockOn: Interpolationsgeschwindigkeit hartcodiert (RInterpTo, 10.f,
+   LockOnComponent.cpp). Soll aus den Settings kommen (siehe OffenePunkte.txt).

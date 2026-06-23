@@ -1,0 +1,51 @@
+Framework-Anpassungen (ProjectMirror als Basis für zukünftige Projekte)
+======================================================================
+Stand: 2026-06-23
+
+HINWEIS zu Umbenennungen seit der ersten Fassung dieser Liste:
+  AHUDPlayer        -> AHUDInGame (AHUD)
+  UHUDInGame        -> UWidgetPlayerHUD (CommonActivatableWidget, Gameplay-Layer)
+  UWidgetInGameMenu -> UWidgetPauseMenu
+  USettingsWidgetClass -> USettingsUserInterface
+
+1. AHUDInGame — Entkopplung von projektspezifischen Widget-Typen
+   - PushInGameMenu() + die Abhängigkeit auf UWidgetPauseMenu sind
+     projektspezifisch; zusätzlich ist die Menü-/Ambient-BGM-Steuerung
+     (ActivateMenuBgm/EndMenuBgm) direkt in AHUDInGame verdrahtet.
+   - Lösung: AHUDInGame bekommt nur generische Layer-Methoden (z.B.
+     PushToMenuLayer); projektspezifische HUD-Logik in eine Subklasse
+     (z.B. AHUDInGameGame : public AHUDInGame).
+
+2. UWidgetHUDLayout — Layer-Namen sind hardcoded
+   - GameHUDLayer als feste BindWidget-Property; MenuLayer existiert noch,
+     wird aber aktuell nicht genutzt (@todo: evtl. entfernen). Das Pausemenü
+     wird derzeit in den GameHUDLayer gepusht.
+   - Für ein anderes Projekt passen die Layer-Namen evtl. nicht oder es
+     werden mehr/andere Layer gebraucht.
+   - Vor dem nächsten Projekt: Layer-Struktur (ein Stack vs. getrennte
+     Gameplay-/Menü-Layer) bewusst festlegen.
+
+3. USettingsUserInterface — enthält projektspezifische Einträge
+   - InGameMenuClass (UWidgetPauseMenu) ist projektspezifisch.
+   - Framework-relevante Entries (HUDLayoutClass, InteractionPromptWidgetClass,
+     SavingThrobberClass, Button-Styles) könnten von projektspezifischen
+     getrennt werden, z.B. in eine eigene Settings-Klasse.
+
+4. Allgemein: Prüfen welche Klassen echte Basisklassen sind vs. projektspezifisch
+   - Framework-Kandidaten: AHUDInGame, AControllerPlayable, AGameModePlayable,
+     ACharacterBase, USubsystemSaveAndLoad, USubsystemLevelLoading,
+     USubsystemObjectEvents, USubsystemBgm, UWidgetHUDLayout, UWidgetPlayerHUD,
+     UInteractionComponent, ULockOnComponent, UFootstepAudioComponent.
+   - Projektspezifisch: ACharacterPlayer, UWidgetPauseMenu, AInteractableMysteriousMirror,
+     alle konkreten Widget-BPs.
+
+5. UWidgetPlayerHUD — Input-Config hardcoded
+   - GetDesiredInputConfig liefert fix Game + CapturePermanently.
+   - Für Projekte mit anderem Maus-/Capture-Verhalten ggf. konfigurierbar machen
+     (z.B. über Settings oder virtuelle Default-Werte in einer Subklasse).
+
+6. Komponenten-Komposition im Controller (AControllerPlayable::OnPossess)
+   - Kamera-, LockOn- und Interaction-Component werden zur Laufzeit per
+     AddComponentByClass an den Pawn gehängt. Sauber und entkoppelt, aber die
+     konkreten Komponenten-Klassen sind fest verdrahtet. Für ein Framework ggf.
+     über Settings/virtuelle Getter konfigurierbar machen.
