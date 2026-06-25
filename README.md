@@ -106,15 +106,6 @@ This project keeps **living technical documentation** in [`Docs/`](Docs/) — a 
 
 ---
 
-## Media
-
-<!-- Add gameplay screenshots / GIFs here, e.g.:
-![Mirror room](Docs/media/mirror_room.png)
--->
-
-*Screenshots and gameplay clips to be added.*
-
----
 
 ## A note on workflow
 
