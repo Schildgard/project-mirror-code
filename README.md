@@ -1,7 +1,4 @@
 # Project Mirror
-<div align="center">
- <img width="3059" height="1322" alt="PM1" src="https://github.com/user-attachments/assets/1e8667d9-9a8e-46f5-8436-ab9887d983b2" width = "600"/>
-</div>
 > An atmospheric third-person **action-adventure / soulslike-horror** built from the ground up in **Unreal Engine 5 (C++)**.
 > Working pitch: *"Silent Hill in the clothes of Demon's Souls."*
 
@@ -10,6 +7,11 @@
 I share it publicly as an **engineering portfolio piece**: the focus below is on *how the code is structured*, not on selling a finished game.
 
 > **Status — early development.** This is a vertical-slice / prototype build. Several systems are intentionally still open. The value on display here is the **architecture and the discipline around it**, not feature-completeness.
+
+<div align="center">
+ <img width="3059" height="1322" alt="PM1" src="https://github.com/user-attachments/assets/1e8667d9-9a8e-46f5-8436-ab9887d983b2" width = "600"/>
+</div>
+
 
 ---
 
