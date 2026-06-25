@@ -1,5 +1,7 @@
 # Project Mirror
-
+<div align="center">
+ <img width="3059" height="1322" alt="PM1" src="https://github.com/user-attachments/assets/1e8667d9-9a8e-46f5-8436-ab9887d983b2" width = "600"/>
+</div>
 > An atmospheric third-person **action-adventure / soulslike-horror** built from the ground up in **Unreal Engine 5 (C++)**.
 > Working pitch: *"Silent Hill in the clothes of Demon's Souls."*
 
