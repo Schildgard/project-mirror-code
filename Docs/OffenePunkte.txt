@@ -1,0 +1,290 @@
+================================================================================
+  OFFENE PUNKTE — Projektübersicht
+  Stand: 2026-07-20
+================================================================================
+
+Konvention: Punkte mit file:line sind im Code verifiziert. Punkte ohne Referenz
+sind Design-/Architekturschulden ohne feste Fundstelle.
+
+
+================================================================================
+SEIT DEM LETZTEN STAND ERLEDIGT (2026-06-29 → 2026-07-20)
+================================================================================
+
+  - ProvisoricTestStat ist weg — ersetzt durch UAttributeComponent mit echtem
+    Attributmodell (Base/Effective/Derived).
+  - Slot-Zuordnung beim Laden ist gefixt: SetEquipmentFromSave rüstet direkt in
+    den gespeicherten Slot aus, statt ihn neu aufzulösen (PIE-verifiziert).
+  - FPlayerConditionData ist aufgeteilt in FPlayerDataDiskAndMemory (Attribute,
+    HP, Equipment) und FPlayerDataDiskOnly (Transform). Die Trennung
+    "persistent vs. runtime" ist damit halb erledigt — siehe Punkt 2.
+  - Attribut-Persistenz über Levelwechsel und SaveGame ist gebaut und
+    PIE-verifiziert.
+  - Run-State-Reset beim Rückkehr ins Hauptmenü (ResetWorldState in
+    StartNewGame).
+  - Dangling Raw-Pointer-Payload im BGM-Subsystem (Levelwechsel-Crash) über
+    WeakObjectPtr gefixt.
+
+
+================================================================================
+ARCHITEKTUR / NOCH NICHT IMPLEMENTIERT
+================================================================================
+
+1. TransitionPoint/EntryPoint-IDs (SubsystemLevelLoading)
+   Verschiedene Eintrittspunkte pro Level sind noch nicht ausgespielt. Der
+   Spieler spawnt unabhängig davon, aus welchem Transitionspunkt er kommt.
+   Grundlage vorhanden: PendingEntryPoint inkl. Get/Set — die Auswertung am
+   Ziel-Level fehlt.
+
+2. Buffs vs. Basis-Stats noch nicht getrennt (SaveGameData.h)
+   Die Disk-/Memory-Trennung steht, aber innerhalb von
+   FPlayerDataDiskAndMemory sind Basiswerte und temporäre Modifikatoren nicht
+   unterscheidbar. Nötig, sobald Buffs (UCharacterEffect) einen Levelwechsel
+   überleben, einen SaveGame-Load aber nicht.
+
+3. Tod und Stagger fehlen komplett
+   Das Kampfsystem kann Schaden zufügen und Leben abziehen, aber es passiert
+   nichts, wenn CurrentHealth auf 0 fällt. Blockiert außerdem mehrere
+   Interrupt-Pfade (s. Punkt 11).
+
+
+================================================================================
+KAMPFSYSTEM (Details in Docs/CombatSystem.txt)
+================================================================================
+
+4. Mitigationsformel ist Platzhalter (CharacterBase.cpp:63, im Code markiert)
+   Rein subtraktiv pro Kanal, bei null geclampt, Kanäle summiert. Die echte
+   Kurve ist eine offene Designentscheidung.
+
+5. Angreifer-Attribute wirken nicht auf den Schaden
+   Es fehlen die Scaling-Daten (Str/Dex-Skalierung pro Waffe). Aktuell zählt
+   nur der Waffenwert.
+
+6. Charged-Aktionsmodus unausgeführt
+   FWeaponAction trägt ChargeLoopSection und ReleaseSection, die Ausführung im
+   CombatComponent fehlt.
+
+7. ESustainedPose::Channel sitzt im falschen Enum
+   Beschreibt keine Pose der SustainedPoses-State-Machine, sondern einen
+   anderen Mechanismus (bewegungsverhindernde Loop-Montage). Gehört zu
+   EWeaponActionMode.
+
+8. Sustained-Zweig liegt vor dem Default-Slot (AnimGraph)
+   Eine Angriffsmontage überschreibt die Haltepose vollständig. Relevant, sobald
+   bPreservesSustainedAction wirken soll (Speerstich aus der Deckung).
+   BEWUSST VERTAGT 2026-07-20 — es gibt noch keine Speere.
+
+9. Blockgang sieht falsch aus
+   Der freie Arm schwingt gegen nichts, weil der Gehzyklus mit gegenschwingenden
+   Armen authored ist. Der Dämpfungs-Layer ist ein Regler, kein Fix. Saubere
+   Lösung: eigener Locomotion-Satz fürs Blocken.
+
+10. Debug-Scaffolding in der Trefferkette
+    Vor einem Build entfernen.
+
+11. EndSustainedAction wird nicht von allen Interrupts gerufen
+    ClearAllEquipment und SetEquipmentFromSave feuern OnWeaponChanged, aber kein
+    Release — eine gehaltene Aktion überlebt damit Levelwechsel und
+    SaveGame-Load. Zusammen mit Tod/Stagger nachziehen.
+
+12. Richtungsprüfung beim Blocken fehlt
+    Aktuell blockt der Schild in jede Richtung, auch von hinten.
+
+13. StaminaComponent: Werte pro Frame neu berechnet
+    (StaminaComponent.cpp:117, @todo) StaminaPerEndurance u.ä. sollen in
+    BeginPlay gecacht werden.
+
+
+================================================================================
+CHARACTER / SAVE
+================================================================================
+
+14. CharacterBase Save-Subscription überschreibt keine Blueprint-Overrides
+    (CharacterBase.cpp:95, @todo)
+    CommandSaveGame.AddUObject bindet direkt auf OnCommandSaveData_Implementation.
+    Blueprint-Subklassen, die die Funktion überschreiben, werden nicht
+    berücksichtigt. Fix: Bindung in eine virtuelle Funktion wrappen.
+
+15. FSaveFileSlotData unvollständig (SubsystemSaveAndLoad.h:18, @todo)
+    Enthält bisher nur SaveFileID. Fehlen Timestamp, Levelname, Screenshot.
+    Relevant, sobald ein Ladescreen-UI gebaut wird.
+
+16. Save-Guard kann schnelle Saves verwerfen
+    (SubsystemSaveAndLoad.cpp:27/45/159)
+    Async-Save + bIsSaving-Guard verwerfen überlappende SaveAllData-Aufrufe →
+    die Invariante Memory == Disk kann brechen. Lösung: Pending-Save-Flag, das
+    nach Abschluss des laufenden Saves einen ausstehenden Save nachzieht.
+
+17. Save-Key-Kollision CharacterID = "Player"
+    Global und last-writer-wins. Ein zweiter Pawn ließ schon einmal einen leeren
+    Zwilling das Loadout überschreiben. Aktuell entschärft (ein Pawn), aber die
+    CharacterID muss künftig pro Instanz eindeutig sein.
+
+
+================================================================================
+EQUIPMENT / WEAPON (Details in Docs/EquipmentSystem.txt)
+================================================================================
+
+18. FEquipmentBlend ist toter Code (EquipmentComponent.h:21)
+    Wird nirgends im Projekt referenziert — der frühere Attach-Blend ist durch
+    die Proxy-/Notify-Choreografie ersetzt worden. Entfernen.
+
+19. Pickup nimmt fest Equipment an (InteractablePickupObject.cpp:87, @todo)
+    Für Nicht-Equipment-Items / Inventar braucht es eine Verzweigung bzw. ein
+    InventoryComponent.
+
+20. Equipment-Visuals synchron geladen
+    LoadSynchronous für Static-/Skeletal-Mesh. Bei großen Assets ggf. async
+    (StreamableManager), analog BGM-System.
+
+21. Skeletale Rüstung nur zur Hälfte da
+    AEquipmentSkeletal existiert; das Ausblenden verdeckter Körperteile
+    (Mask-Blend über Regionsmaske + Hide_*-Scalars via DMI) ist entworfen, aber
+    weder Material-Graph noch C++-Wiring gebaut.
+
+22. UDefinitionWeapon von UDefinitionEquipment ableiten
+    VERTAGT 2026-07-19. Inzwischen sind so viele Felder waffen-only, dass
+    EditConditionHides schlechter ist als echte Vererbung.
+
+23. EquipmentComponent an JEDEM Charakter
+    Bewusst fürs Framework, aber Overhead bei NPCs, die nie etwas ausrüsten.
+
+
+================================================================================
+CLIMBING (Details in Docs/ClimbSystem.txt)
+================================================================================
+
+24. Shimmy (seitliches Hangeln) nicht gebaut
+    HandleClimbingInput hat die Horizontalzweige als leere Stubs. Braucht eine
+    Frontier-Prüfung, sonst hangelt der Spieler über das Kantenende hinaus.
+
+25. Debug-Traces zeichnen immer (ClimbComponent.cpp:77 und :115)
+    EDrawDebugTrace::ForDuration ist fest verdrahtet. Vor einem Build auf None
+    stellen oder an ein Debug-Flag hängen.
+
+26. Greifpunkt an Actor-Position statt Hand-Socket
+    Bei stark unterschiedlichen Kantenformen sichtbar ungenau.
+
+27. CancelRunning zertritt den Hanging-Zustand
+    Sprint- und Kletterkomponente kennen einander nicht.
+
+28. Bidirektionale Kopplung ClimbComponent ↔ AnimInstance
+    Beide rufen sich gegenseitig. Bekannt, bewusst vertagt.
+
+
+================================================================================
+AUDIO
+================================================================================
+
+29. BGM Fade-Out-Timer nutzt lokales Handle (SubsystemBgm.cpp:52, @todo)
+    Der Timer feuert auch dann, wenn er nicht mehr gebraucht wird. Der Fall wird
+    über einen Top-Stack-Guard abgefangen; sauberer wäre ein Member-TimerHandle,
+    das aktiv gecancelt werden kann.
+
+30. Footstep: synchrones Laden + hartcodierte Werte (FootstepAudioComponent)
+    RebuildSoundMap lädt per LoadSynchronous; LineTraceDistance (30 cm) und
+    Trace-Channel sind hartcodiert.
+
+31. VolumeBgmArea: Overlap-Lücke bewusst offen
+    Beim Wechsel zwischen zwei angrenzenden Gebietsvolumen kann kurzzeitig
+    keines aktiv sein. Akzeptiert, solange Gebiete sich nicht berühren.
+
+
+================================================================================
+INTERAKTION / LOCK-ON
+================================================================================
+
+32. TOCTOU zwischen Interaktions-Trigger und AnimNotify
+    Zwischen TriggerInteraction (Montage-Start + Snap) und AnimNotify_Interact
+    liegen mehrere Frames; CurrentInteractable kann sich in dem Fenster ändern.
+    Interact() prüft die Gültigkeit erneut (kein ungültiger Zugriff), aber im
+    Extremfall wird mit einem anderen als dem angeschnappten Objekt interagiert.
+    Lösung: Ziel über die Interaktionsdauer locken.
+
+33. IsInterActionPossible ist edge-getriggert
+    Wird nur bei Radius-Eintritt und beim Interagieren ausgewertet, nie gepollt
+    → stale Prompt (z.B. Fackel anzünden, während man schon an der Feuerstelle
+    steht). Bewusst offen.
+
+34. Slot-Auflösung beim Anzünden doppelt gerechnet
+    Feuerstelle und Charakter lösen beide den Ignitable-Slot auf. Sollte über
+    IInteractable auf eine Quelle zusammengeführt werden.
+
+35. LockOn: Zielpunkt = Actor-Location statt Socket
+    (LockOnComponent.cpp, @todo) Für große Gegner ggf. ungenau.
+
+36. LockOn-Interpolationsgeschwindigkeit hartcodiert
+    (LockOnComponent.cpp:68, @todo) Wert 10.f direkt im RInterpTo — soll aus den
+    Spielereinstellungen kommen.
+
+37. Feuerstellen-Persistenz / Extinguish-UI
+    Der Zündzustand von Feuerstellen wird gespeichert; das Löschen hat noch
+    keine UI-Rückmeldung.
+
+
+================================================================================
+WELT / OBJEKTE
+================================================================================
+
+38. InteractableMysteriousMirror: Despawn-Volumen
+    (InteractableMysteriousMirror.h:28) MirrorDespawnRadius ist eine
+    UBoxComponent, der Name suggeriert eine Sphere. Form oder Benennung
+    angleichen.
+
+39. Spiegel/Illusionsobjekte — Robustheit
+    (Details: Docs/MirrorStaircaseSystem.txt)
+    a. Keine Blickwinkel-Hysterese: harte Facing-Schwelle (-0.5) → Flackern am
+       Rand des Toleranzkegels. Lösung: getrennte Ein-/Aus-Schwellen.
+    b. Ungedrosselter Tick bei mehreren sichtbaren Spiegeln.
+    c. Unenforced Designer-Annahme: ATriggerableIllusionaryObject setzt ein
+       Material mit nutzbarem Alpha voraus; fehlt es, blendet nichts (still).
+       Validierung/Log fehlt.
+    d. Kein Multiplayer: Facing-Auswertung und Materialzustand sind rein lokal.
+    e. Reflektion: voller SceneCapture-Pass pro Frame, solange der Spiegel
+       sichtbar ist (nur über WasRecentlyRendered gegated).
+
+40. Heilbrunnen: Refill und Flush-Volumen fehlen
+    Der Füllstand liegt in ValueStateMap und wird bewusst NICHT bei jeder
+    Änderung geschrieben (pro-Frame-Writes). Der geplante Flush über ein
+    Raum-Volume ist noch nicht gebaut. Levelwechsel-Verhalten ungetestet.
+
+41. Illusionswand: Treffersound PIE-ungetestet
+    SettingsSound::IllusionaryObjectFadeSound wird in ReceiveDamage gespielt.
+
+42. Save-Atomizität bei Triggerables
+    Unkritisch, solange Reaktionen idempotent sind. Wird relevant bei
+    Item-Grants, Sequenzketten und One-Shot-Spawns.
+
+
+================================================================================
+WORLD EVENT SYSTEM (Details in Docs/WorldEventSystem.txt)
+================================================================================
+
+43. ActivateChildObject (EEventReactionType) unimplementiert
+    (TriggerableObject.cpp:91, @todo — als "später relevant" markiert)
+
+44. ToggleVisibility + bCheckObjectConditionOnBeginPlay
+    Der Default-Mesh-Zustand muss dem "aus"-Zustand entsprechen. Implizite
+    Konvention, nicht erzwungen.
+
+45. bIsOneTimeInteraction=true + bIsStatePersistent=true
+    Redundante Kombination ohne Warning.
+
+
+================================================================================
+UI
+================================================================================
+
+46. HUDOutGame: HUDLayout mit nur einem Stack (HUDOutGame.cpp:17, @todo)
+    Vermutlich durch einen einzelnen Stack ersetzbar; mindestens den ungenutzten
+    Stack entfernen. Betrifft auch WidgetHUDLayout.h:23 (MenuLayer).
+
+47. MVVM-Bindings im Editor-Panel waren fragil
+    Für die HP-/Stamina-Progressbars gelöst durch reine C++-FieldNotify-Bindung
+    (AddFieldValueChangedDelegate) statt UMVVMView. VMInteractWidget und
+    VMMenuButton nutzen weiterhin Editor-Bindings und könnten dieselbe
+    Fragilität haben — bei Gelegenheit gegenprüfen.
+
+48. Widget-Erzeugung im SubsystemLevelLoading (SubsystemLevelLoading.cpp:80,
+    @todo) Für lokalen Multiplayer müsste das Widget pro PlayerController
+    erzeugt und auf dessen Screen gelegt werden.

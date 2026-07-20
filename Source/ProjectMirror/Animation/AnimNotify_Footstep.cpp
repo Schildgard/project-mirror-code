@@ -9,7 +9,6 @@ UAnimNotify_Footstep::UAnimNotify_Footstep()
 #if WITH_EDITOR
 	bShouldFireInEditor = false;
 #endif
-	
 }
 
 void UAnimNotify_Footstep::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenceBase* Animation, const FAnimNotifyEventReference& EventReference)
@@ -18,18 +17,17 @@ void UAnimNotify_Footstep::Notify(USkeletalMeshComponent* MeshComp, UAnimSequenc
 	{
 		return;
 	}
-	
+
 	const AActor* OwningActor = MeshComp->GetOwner();
 	if (!IsValid(OwningActor))
 	{
 		return;
 	}
-	
-	 UFootstepAudioComponent* FootstepAudio = OwningActor->GetComponentByClass<UFootstepAudioComponent>();
+
+	UFootstepAudioComponent* FootstepAudio = OwningActor->GetComponentByClass<UFootstepAudioComponent>();
 	if (!IsValid(FootstepAudio))
 	{
 		return;
 	}
 	FootstepAudio->PlayFootstepAudio();
-	
 }

@@ -7,6 +7,7 @@
 #include "Engine/StreamableManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "ProjectMirror/Settings/SettingsSound.h"
+#include "ProjectMirror/UI/HUDInGame.h"
 
 
 TArray<TObjectPtr<UAudioComponent>>& USubsystemBgm::GetAudioStack(const ESoundCategory Category)
@@ -52,7 +53,8 @@ void USubsystemBgm::FadeMusicOut(UAudioComponent* TargetAudioComponent, bool bPa
 		FTimerManager& TimerManager = GetWorld()->GetTimerManager();
 		FTimerHandle TimerHandle;
 		TWeakObjectPtr<UAudioComponent> WeakTargetAudioComponent{TargetAudioComponent};
-		const FTimerDelegate TimerDelegate = FTimerDelegate::CreateUObject(this, &USubsystemBgm::PauseMusicAfterFadeOut, WeakTargetAudioComponent, SoundCategory);
+		const FTimerDelegate TimerDelegate = FTimerDelegate::CreateUObject(this, &USubsystemBgm::PauseMusicAfterFadeOut, WeakTargetAudioComponent,
+		                                                                   SoundCategory);
 
 		TimerManager.SetTimer(TimerHandle, TimerDelegate, FadeDuration, false);
 		return;
@@ -63,6 +65,123 @@ void USubsystemBgm::FadeMusicOut(UAudioComponent* TargetAudioComponent, bool bPa
 	FadeOutAndDestroy(TargetAudioComponent);
 	ResumeMusicAfterFadeOut(SoundCategory);
 }
+
+UAudioComponent* USubsystemBgm::FindStackComponentBySound(const TArray<TObjectPtr<UAudioComponent>>& Stack, const USoundBase* Sound) const
+{
+	if (!IsValid(Sound))
+	{
+		return nullptr;
+	}
+	for (const TObjectPtr<UAudioComponent>& Audio : Stack)
+	{
+		if (IsValid(Audio) && Audio->GetSound() == Sound)
+		{
+			return Audio;
+		}
+	}
+	return nullptr;
+}
+
+void USubsystemBgm::EnterBgmArea(const TObjectPtr<USoundBase> MusicToPlay, ESoundCategory Category)
+{
+	if (!IsValid(MusicToPlay))
+	{
+		return;
+	}
+
+	TArray<TObjectPtr<UAudioComponent>>& AudioStack = GetAudioStack(Category);
+
+	if (UAudioComponent* AreaBgm = FindStackComponentBySound(AudioStack, MusicToPlay))
+	{
+		if (AudioStack.Top() != AreaBgm)
+		{
+			FadeMusicOut(AudioStack.Top(), true, Category);
+			AudioStack.Remove(AreaBgm);
+			AudioStack.Push(AreaBgm);
+			FadeMusicIn(AreaBgm, true);
+		}
+		return; //if Top, the MusicToPlay is currently playing.
+	}
+	UAudioComponent* NewBgmComponent = CreateAndSetupAudioComponent(MusicToPlay);
+
+	if (!IsValid(NewBgmComponent))
+	{
+		return;
+	}
+	FadeMusicIn(NewBgmComponent, false);
+	if (!AudioStack.IsEmpty())
+	{
+		FadeMusicOut(AudioStack.Top(), true, Category);
+	}
+	AudioStack.Push(NewBgmComponent);
+}
+
+void USubsystemBgm::ExitBgmArea(const TObjectPtr<USoundBase> MusicToStop, ESoundCategory Category)
+{
+	if (!IsValid(MusicToStop))
+	{
+		return;
+	}
+
+	TArray<TObjectPtr<UAudioComponent>>& AudioStack = GetAudioStack(Category);
+
+	if (AudioStack.IsEmpty() || AudioStack.Top()->GetSound() != MusicToStop)
+	{
+		return;
+	}
+
+	UAudioComponent* CurrentBgmComponent = AudioStack.Top();
+
+	FadeMusicOut(CurrentBgmComponent, true, Category);
+
+	AudioStack.Pop();
+	if (AudioStack.IsEmpty())
+	{
+		return;
+	}
+	AudioStack.Insert(CurrentBgmComponent, AudioStack.Num() - 1);
+
+	ResumeMusicAfterFadeOut(Category);
+}
+
+void USubsystemBgm::HandleInGameMenuOpened()
+{
+	if (const USettingsSound* Settings = GetDefault<USettingsSound>())
+	{
+		const TSoftObjectPtr<USoundBase> SoundSoftPtr = Settings->IngGameMenuMusic;
+		if (SoundSoftPtr.IsNull())
+		{
+			return;
+		}
+		LoadSoundAsyncFromSoftPtr(SoundSoftPtr, ESoundCategory::BackgroundMusic, true);
+		//Fade out Ambient
+		if (AmbientStack.IsEmpty())
+		{
+			return;
+		}
+		if (UAudioComponent* CurrentAmbient = AmbientStack.Top())
+		{
+			FadeMusicOut(CurrentAmbient, true, ESoundCategory::AmbientSound);
+		}
+	}
+}
+
+void USubsystemBgm::HandleInGameMenuClosed()
+{
+	//Fade out CurrentMusic
+	if (MusicStack.IsEmpty())
+	{
+		return;
+	}
+	if (UAudioComponent* CurrentMusic = MusicStack.Top())
+	{
+		//Resume of old bgm is handled in FadeMusicOutFunction
+		FadeMusicOut(CurrentMusic, false, ESoundCategory::BackgroundMusic);
+	}
+	//Fade Ambient back in
+	ResumeMusicAfterFadeOut(ESoundCategory::AmbientSound);
+}
+
 
 void USubsystemBgm::FadeMusicIn(UAudioComponent* TargetAudioComponent, bool bWasSoundPaused)
 {
@@ -84,6 +203,7 @@ void USubsystemBgm::FadeMusicIn(UAudioComponent* TargetAudioComponent, bool bWas
 
 void USubsystemBgm::OnPreLoadLevel(const FString& LevelName)
 {
+	;
 	CleanUpStacksAndComponentsForLevelTransition(MusicStack);
 	CleanUpStacksAndComponentsForLevelTransition(AmbientStack);
 }
@@ -92,9 +212,9 @@ void USubsystemBgm::OnPostLevelLoad(UWorld* LoadedLevel)
 {
 	if (const USettingsSound* SoundSettings = GetDefault<USettingsSound>())
 	{
-		const FSoftObjectPath LoadedPath(LoadedLevel);                                                                                                                                                                                   
-		const FSoftObjectPath NormalizedPath(UWorld::RemovePIEPrefix(LoadedPath.ToString())); 
-		
+		const FSoftObjectPath LoadedPath(LoadedLevel);
+		const FSoftObjectPath NormalizedPath(UWorld::RemovePIEPrefix(LoadedPath.ToString()));
+
 		const TSoftObjectPtr<USoundBase>* NewBgmSoftPtrRef = nullptr;
 		const TSoftObjectPtr<USoundBase>* NewAmbientSoftPtrRef = nullptr;
 
@@ -185,7 +305,8 @@ void USubsystemBgm::OnMusicFadeOutFinished(UAudioComponent* FinishedAudio)
 	FinishedAudio->DestroyComponent();
 }
 
-void USubsystemBgm::LoadSoundAsyncFromSoftPtr(TSoftObjectPtr<USoundBase> LoadedSound, ESoundCategory Category, bool bPausePreviousSound)
+void USubsystemBgm::LoadSoundAsyncFromSoftPtr(TSoftObjectPtr<USoundBase> LoadedSound, ESoundCategory Category, bool bPausePreviousSound,
+                                              UAudioComponent* CachedAudioCompFromExtern)
 {
 	TWeakObjectPtr<UWorld> RequestWorld = GetWorld();
 
@@ -211,7 +332,7 @@ void USubsystemBgm::Initialize(FSubsystemCollectionBase& Collection)
 
 	FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &USubsystemBgm::OnPostLevelLoad);
 	FCoreUObjectDelegates::PreLoadMap.AddUObject(this, &USubsystemBgm::OnPreLoadLevel);
-	
+
 	if (const USettingsSound* SoundSettings = GetDefault<USettingsSound>())
 	{
 		FadeDuration = SoundSettings->SoundFadeDuration;

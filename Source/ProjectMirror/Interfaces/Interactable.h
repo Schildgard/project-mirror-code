@@ -6,9 +6,12 @@
 #include "UObject/Interface.h"
 #include "ProjectMirror/Utility/EnumCollection.h"
 #include "Components/SceneComponent.h"
+#include "ProjectMirror/InteractionComponent.h"
+#include "ProjectMirror/Data/DefinitionEquipment.h"
 #include "Interactable.generated.h"
 
 DECLARE_LOG_CATEGORY_EXTERN(LogInteraction, Log, All);
+
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnInteractionDisabled, AActor*, DisabledInteractable);
 
 // This class does not need to be modified.
@@ -27,14 +30,15 @@ class PROJECTMIRROR_API IInteractable
 
 public:
 	UFUNCTION(BlueprintNativeEvent)
-	void OnInteract();
+	void OnInteract(UInteractionComponent* InteractionComponent);
 	UFUNCTION(BlueprintNativeEvent)
 	FName GetInteractionPrompt();
-	UFUNCTION(BlueprintNativeEvent)
-	bool IsInterActionPossible();
 	virtual FOnInteractionDisabled& GetOnInteractionDisabledDelegate() = 0;
+	virtual UDefinitionItem* GetContainedItemDefinition() const { return nullptr; }
 	UFUNCTION(BlueprintNativeEvent)
 	EInteractionCategory GetInteractionCategory();
 	UFUNCTION(BlueprintNativeEvent)
 	USceneComponent* GetInteractionSnapTargetComponent();
+	UFUNCTION(BlueprintNativeEvent)
+	bool IsInterActionPossible(UInteractionComponent* InteractionComponent);
 };

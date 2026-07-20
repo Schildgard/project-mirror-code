@@ -11,7 +11,7 @@ UCLASS(config = ProjectMirror, DefaultConfig, meta = (DisplayName = "Character S
 class PROJECTMIRROR_API USettingsCharacter : public UDeveloperSettings
 {
 	GENERATED_BODY()
-	
+
 	USettingsCharacter(const FObjectInitializer& ObjectInitializer);
 
 public:
@@ -65,4 +65,47 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, Category = "CameraMovement")
 	float BrakingDecelerationFalling = 1500.0f;
+
+	//Interaction
+	UPROPERTY(Config, EditAnywhere, Category = "CameraMovement")
+	float InteractionHeightDistanceTolerance = 40.f;
+
+	//Climbing
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float AcceptableForwardDistance = 50.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float AcceptableUpwardDistance = 100.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float ClimbScanRadius = 10.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float MaxHeightToleranceBetweenSocketAndEdge = 60.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float MinHeightToleranceBetweenSocketAndEdge = 20.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float EdgeInwardOffset = 30.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float MinLedgeSurfaceUpDot = 0.7;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float HangBackDistance = 30.f;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float HangDownDistance = 60.f;
+	
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")                                                                                                                                                                                                                                                                                                                                                                         
+	TEnumAsByte<EObjectTypeQuery> ClimbableObjectType;
+	
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float SnapOnLedgeForwardOffset = 25.f;
+	
+	UPROPERTY(Config, EditAnywhere, Category = "Climbing")
+	float SnapOnLedgeUpwardOffset = 60.f;
+	
+	
 };

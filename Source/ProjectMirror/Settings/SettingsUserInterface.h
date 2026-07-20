@@ -6,6 +6,7 @@
 #include "Engine/DeveloperSettings.h"
 #include "SettingsUserInterface.generated.h"
 
+class UWidgetPlayerHUD;
 class UCommonActivatableWidget;
 class UWidgetButtonSlotContainerVertical;
 class UCommonButtonStyle;
@@ -46,4 +47,7 @@ public:
 	
 	UPROPERTY(Config, EditAnywhere)
 	TSubclassOf<UCommonButtonStyle> FocusMenuButtonStyle;
+	
+	UPROPERTY(Config, EditAnywhere)
+	TSubclassOf<UWidgetPlayerHUD> PlayerHUDClass;
 };

@@ -3,16 +3,16 @@
 
 #include "SaveGameData.h"
 
-void USaveGameData::SavePlayerTransformData(const FName& ObjectID, const FPlayerTransformData& PlayerSaveData)
+void USaveGameData::SavePlayerStaticData(const FName& ObjectID, const FPlayerDataDiskOnly& PlayerSaveData)
 {
 	if (ObjectID.IsNone())
 	{
 		return;
 	}
-	PlayerSaveDataMap.Add(ObjectID, PlayerSaveData);
+	PlayerStaticSaveDataMap.Add(ObjectID, PlayerSaveData);
 }
 
-FPlayerConditionData* USaveGameData::GetPlayerConditionData(const FName& ObjectID)
+FPlayerDataDiskAndMemory* USaveGameData::GetPlayerConditionData(const FName& ObjectID)
 {
 	if (ObjectID.IsNone())
 	{
@@ -21,7 +21,7 @@ FPlayerConditionData* USaveGameData::GetPlayerConditionData(const FName& ObjectI
 	return PlayerConditionDataMap.Find(ObjectID);
 }
 
-void USaveGameData::SavePlayerConditionData(const FName& ObjectID, const FPlayerConditionData& PlayerConditionData)
+void USaveGameData::SavePlayerConditionData(const FName& ObjectID, const FPlayerDataDiskAndMemory& PlayerConditionData)
 {
 	if (ObjectID.IsNone())
 	{
@@ -36,11 +36,11 @@ void USaveGameData::SaveCurrentLevel(const FName& LevelName)
 }
 
 
-FPlayerTransformData* USaveGameData::GetPlayerTransformData(const FName& ObjectID)
+FPlayerDataDiskOnly* USaveGameData::GetPlayerStaticData(const FName& ObjectID)
 {
 	if (ObjectID.IsNone())
 	{
 		return nullptr;
 	}
-	return PlayerSaveDataMap.Find(ObjectID);
+	return PlayerStaticSaveDataMap.Find(ObjectID);
 }

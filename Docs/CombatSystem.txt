@@ -1,0 +1,407 @@
+================================================================================
+  KAMPF-, ATTRIBUT- & TREFFERSYSTEM — Dokumentation
+  Stand: 2026-07-20 (Inhalt gegen aktuellen Code geprüft)
+================================================================================
+
+ÜBERBLICK
+---------
+Das Kampfsystem besteht aus vier weitgehend unabhängigen Bausteinen:
+
+  1. Attribute & Pools   — was ein Charakter aushält (UAttributeComponent,
+                           UStaminaComponent)
+  2. Ausrüstungswerte    — was eine Waffe/Rüstung beisteuert (FAttackStats,
+                           FDefenseStats, FBlockStats auf UDefinitionEquipment)
+  3. Aktionsausführung   — was auf Tastendruck passiert (UCombatComponent,
+                           FWeaponAction, Montage-Sections)
+  4. Trefferkette        — wer wen trifft und wie es sich anfühlt (AnimNotify →
+                           Sweep → IDamageable → Feedback)
+
+Bewusst KEIN Gameplay Ability System. Das Spiel ist Singleplayer (perspektivisch
+Splitscreen), ohne Replikationsbedarf; GAS hätte hier vor allem Einarbeitungs-
+und Debugging-Kosten ohne Gegenwert. Buffs werden stattdessen als Komponenten
+(UCharacterEffect) modelliert.
+
+Beteiligte Klassen / Daten:
+  - UAttributeComponent   (Characters/Components/)  Attribute + Health-Pool
+  - UStaminaComponent     (Characters/Components/)  Stamina-Pool, player-only
+  - URunComponent         (Characters/Components/)  Sprint als eigener Verbraucher
+  - UCombatComponent      (Characters/Components/)  Aktionsauflösung + Trefferkette
+  - IDamageable           (Interfaces/)             Empfängerseite des Schadens
+  - FAttackStats / FDefenseStats / FBlockStats / FWeaponAction / FDamage
+                          (Utility/CombatData.h)
+  - FHitFeedbackEntry / FHitFeedbackChannelSet (Utility/HitFeedbackData.h)
+  - USettingsCombatFeedback (Settings/)             Effekt-/Sound-Zuordnung
+  - USettingsAttributes     (Settings/)             Attribut-Kurven & Startwerte
+  - UAnimNotifyState_Attack / UAnimNotifyState_ComboWindow (Animation/)
+
+
+================================================================================
+1. ATTRIBUTE & POOLS
+================================================================================
+
+DREI SCHICHTEN
+--------------
+  Base       — der gespeicherte Charakterwert (Levelaufstieg)
+  Effective  — Base + Ausrüstungs-/Buff-Modifikatoren
+  Derived    — daraus abgeleitete Pools (MaxHealth, MaxStamina)
+
+Bewusst OHNE Soft Caps: die Kurven bleiben linear bzw. datengetrieben über
+USettingsAttributes. Intern wird mit float gerechnet, an der UI-Grenze auf int
+gerundet.
+
+UAttributeComponent
+  FStatAttributes: Vitality, Strength, Dexterity, Endurance, Intelligence, Faith
+                   (int32, Default 1)
+  FDerivedStats:   MaxHealth
+  CurrentHealth als eigenes Feld (nicht in DerivedStats — Pool-Füllstand ist
+    kein abgeleiteter Wert).
+
+  RecalculateStats()      — voller Neuaufbau Effective + Derived, füllt den Pool
+                            beim Zugewinn nach (Vitality-Erhöhung heilt).
+  RecalculateDerivedStats()— nur die Ableitung, ohne Pool-Anpassung.
+  InitializeFromSave()    — eigener Pfad fürs Laden: setzt Base und
+                            CurrentHealth direkt und clamped, umgeht damit die
+                            Zugewinn-Nachfüllung. Ohne diese Trennung würde ein
+                            Ladevorgang den Spieler stillschweigend heilen.
+  IncreaseCurrentHealth() — gibt die TATSÄCHLICH angewandte Heilung zurück
+                            (wird vom Heilbrunnen gebraucht, der nur so viel aus
+                            seinem Vorrat abbucht wie wirklich gewirkt hat).
+
+  Delegates: OnAttributeChanged, OnHealthChanged (Basis der HUD-Bindung).
+
+  Jeder Charakter hat eine AttributeComponent — nur Charaktere haben HP, deshalb
+  gibt es bewusst KEIN generisches HealthComponent für Weltobjekte.
+
+UStaminaComponent
+  Besitzt MaxStamina und CurrentStamina selbst (Pool gehört zum Verbraucher-
+  system, nicht in die Attributkomponente).
+  Komponenten-getriebener Drain + verzögerte Regeneration
+  (StaminaRegenDelay, StaminaRegenRate).
+  bIsExhausted + ExhaustionRecoveryThreshold: nach dem Leerlaufen bleibt der
+  Charakter erschöpft, bis eine Mindestmenge zurückregeneriert ist.
+
+  WICHTIG (Designentscheidung): Der Erschöpfungszustand gehört auf die
+  StaminaComponent, NICHT auf die Verbraucher. Sonst müsste jeder neue
+  Verbraucher (Sprint, Angriff, Block, Ausweichrolle) dieselbe Logik erneut
+  implementieren.
+
+  Nur der Spieler bekommt Stamina — die Komponente wird am Controller
+  komponiert, nicht auf CharacterBase.
+
+URunComponent
+  Eigener Verbraucher statt Sprint-Logik im Character. Hält bIsRunning, meldet
+  OnRunStarted/OnRunEnded und zieht über die StaminaComponent ab.
+  Wird — wie StaminaComponent — am AControllerPlayable als Kompositionswurzel
+  verdrahtet. Damit bleibt CharacterPlayer frei von spielerspezifischen
+  Verbrauchern, ohne dass eine eigene Subklasse nötig wird.
+
+
+================================================================================
+2. AUSRÜSTUNGSWERTE
+================================================================================
+
+Waffen- und Rüstungswerte liegen im DataAsset (UDefinitionEquipment), nicht auf
+dem gespawnten Actor. Begründung: das Bundle (Definition) ist die dauerhafte
+Identität eines Items, der Actor ist flüchtig — er wird beim Ablegen zerstört und
+beim Ausrüsten neu erzeugt.
+
+  FAttackStats   AttackPowerPhysical / Magic / Light / Fire / Darkness,
+                 PoiseDamage
+  FDefenseStats  DefensePhysical / Magic / Light / Fire / Darkness, Poise
+  FBlockStats    PhysicalBlock / MagicBlock / LightBlock / FireBlock /
+                 DarknessBlock, Stance
+
+Alle drei sind EditAnywhere und über EditCondition an bIsWeapon gekoppelt:
+Waffen zeigen Attack + Block, Rüstung zeigt Defense.
+
+INSTANZ-MODIFIKATOREN (offen gehalten)
+  Damit einzelne Exemplare später abweichen können (Verzauberung, Abnutzung),
+  läuft der Zugriff NICHT direkt über die Definition, sondern über eine
+  Accessor-Ebene auf AEquipmentBase:
+
+    AEquipmentBase::SourceDefinition + GetAttackStats() / GetDefenseStats() /
+    GetBlockStats() reichen heute nur durch.
+
+  Teuer nachzurüsten wäre der Zugriffsweg, nicht das zusätzliche Feld — deshalb
+  steht der Weg schon, die Instanzdaten noch nicht.
+
+  Gesetzt wird SourceDefinition über SpawnActorDeferred → SetSourceDefinition →
+  FinishSpawning → Attach. Es gibt genau eine Spawn-Stelle, damit diese
+  Reihenfolge nicht an mehreren Orten gepflegt werden muss.
+
+
+================================================================================
+3. AKTIONSAUSFÜHRUNG (UCombatComponent)
+================================================================================
+
+EINGABE-IDENTITÄT
+  FCombatInputIdentity { EEquipmentSlot Slot, bool bIsHeavyVariant }
+  Vier Eingaben (Haupt-/Nebenhand × normal/schwer) laufen über EINEN
+  Einstiegspunkt PerformWeaponAction(). Der Input-Layer bleibt dumm: er meldet
+  nur Started / Completed / Canceled.
+
+  Canceled ist zwingend gebunden — ohne das hängt eine gehaltene Aktion, wenn
+  der Mapping-Context wechselt (z.B. Pausemenü).
+
+AKTIONSMODI (EWeaponActionMode auf FWeaponAction)
+  Instant    — ein Druck, eine Animation. Kann über ComboSections verkettet
+               werden.
+  Sustained  — wird gehalten, erlaubt Bewegung (Block, Fackel vorstrecken).
+               Läuft NICHT über eine Montage, sondern über ein AnimGraph-Flag.
+  Charged    — Aufladen (ChargeLoopSection) und Auslösen (ReleaseSection).
+               Datenmodell steht, Ausführung noch nicht gebaut.
+
+  Der Modus sitzt an der Aktion, nicht an der Waffe: dieselbe Waffe kann auf der
+  Normal-Taste blocken und auf der Schwer-Taste parieren.
+
+ZUSTAND OHNE ZUSTANDS-ENUM
+  Es gibt bewusst KEIN ECombatState. Angreifen und Halten sollen gleichzeitig
+  möglich sein (Speerstich aus der Deckung), was ein Enum mit sich
+  ausschließenden Werten nicht abbilden kann. Der Zustand wird stattdessen aus
+  zwei vorhandenen Fakten abgeleitet:
+
+    IsPerformingAttack()        über ActiveAttackMontage
+    HasActiveSustainedAction()  über ActiveSustainedInput.Slot != Undefined
+
+  ActiveAttackWeapon / ActiveAttackMontage / ActiveSustainedAction werden als
+  Kopie gehalten statt beim Beenden neu aufgelöst. Ein Waffenwechsel mitten im
+  Schwung kann so nicht die falsche Hitbox schließen oder die falsche Aktion
+  beenden.
+
+GEHALTENE EINGABEN
+  HeldCombatInputs (TArray in Druckreihenfolge, Remove+Add beim erneuten
+  Drücken). Nach Ende einer Angriffsmontage läuft ReevaluateHeldInputs() die
+  Liste RÜCKWÄRTS durch und nimmt nur Sustained-Aktionen wieder auf.
+
+  Warum nur Sustained: Instant dort durchzulassen wäre ein Auto-Attack, der
+  jeden Frame nachfeuert. Warum rückwärts statt Last(): sonst bliebe der Schild
+  unten, wenn zuletzt die Angriffstaste gedrückt wurde.
+
+  Zwei Guards in HandleMontageBlendingOut sind nötig:
+    - Montage != ActiveAttackMontage — der Delegate feuert für JEDE Montage
+      (Pickup, Sitzen, Klettern)
+    - !bInterrupted — sonst wird mitten in eine Stagger-/Todesanimation hinein
+      wieder die Deckung hochgezogen
+
+KOMBOS ÜBER MONTAGE-SECTIONS
+  FWeaponAction::ComboSections (TArray<FName>) zählt auf, aus welchen Sections
+  ein Angriff besteht. Cut-/End-Sections stehen NICHT darin — die Liste
+  beschreibt, was der Angriff IST, nicht wie er endet.
+
+  Verkettet wird über Montage_SetNextSection (nahtlos), NICHT über einen
+  Montage-Array pro Schritt (das blendet jedes Mal neu ein).
+
+  Das Kombofenster (UAnimNotifyState_ComboWindow) liegt in der Montage VOR der
+  End-Section.
+
+  TRAGENDE INVARIANTE: Nicht das Fenster selbst hält das System zusammen,
+  sondern dass bIsComboWindowOpen unmittelbar nach erfolgreichem Verketten
+  wieder auf false gesetzt wird. Ohne das überschreibt Tastenmashen im offenen
+  Fenster die bereits gesetzte Umleitung und überspringt Treffer.
+
+  Fallstrick (gelöst, hier als Warnung): Montage_SetNextSection("Default",
+  "Default") verlinkt eine Section auf sich selbst und erzeugt eine Endlos-
+  schleife, die jede Editor-Einstellung schlägt. Nicht mit JumpToSection
+  verwechseln.
+
+  ResolveAttackChain fällt von MainHand auf TwoHanded zurück. Dieser Fallback
+  MUSS zu dem in ResolveAttackingWeapon passen, sonst spielt die Animation einer
+  anderen Waffe als die, deren Hitbox geöffnet wird.
+
+SUSTAINED-AKTIONEN
+  BeginSustainedAction / EndSustainedAction sind idempotent und pushen den
+  Zustand an die AnimInstance:
+
+    SetSustainedAction(bIsSustaining, ESustainedPose, EEquipmentSlot)
+
+  Pose und Slot werden nur beim Starten gesetzt und beim Loslassen bewusst NICHT
+  zurückgesetzt — die State Machine blendet danach noch aus und braucht die
+  Werte bis zum Ende des Blends.
+
+  Der Slot muss mit, weil die haltende Hand variiert: Schilde landen per
+  UEquipmentComponent::ResolveEquipmentSlot immer in der Offhand, Fackeln können
+  in beiden Händen liegen.
+
+  Weil Sustained ohne Montage läuft, greift das Sicherheitsnetz
+  HandleMontageBlendingOut hier nicht. EndSustainedAction muss deshalb von
+  Stagger, Tod, Waffenwechsel und Levelwechsel aus gerufen werden (siehe
+  OffenePunkte).
+
+  AnimGraph-Seite: siehe Abschnitt 5.
+
+
+================================================================================
+4. TREFFERKETTE
+================================================================================
+
+ABLAUF
+  UAnimNotifyState_Attack (auf der Angriffsmontage)
+    Begin  → UCombatComponent::BeginAttackWindow(Slot)
+             löst die Waffe auf, merkt sie als ActiveAttackWeapon,
+             leert ActorsHitThisSwing
+    Tick   → TickAttackTrace()   (jeden Frame des offenen Fensters)
+    End    → EndAttackWindow()
+
+  TickAttackTrace macht einen KAPSEL-SWEEP von der letzten zur aktuellen
+  Hitbox-Position:
+
+    SweepMultiByChannel(..., ECC_GameTraceChannel3,
+                        MakeCapsule(Radius, HalfHeight), QueryParams)
+    QueryParams.bReturnPhysicalMaterial = true
+    Owner + angehängte Actors werden ignoriert
+
+  WARUM SWEEP STATT OVERLAP: Overlap-Events liefern kein PhysicalMaterial. Ohne
+  das lässt sich der Umgebungstreffer (Funken auf Stein vs. Holz) nicht
+  auflösen. Der Sweep löst außerdem das Tunneln schneller Schwünge.
+
+  Die Hitbox sitzt auf AWeaponStaticBase, nicht auf AEquipmentBase — nur Waffen
+  haben eine.
+
+  Dedup: ActorsHitThisSwing wird bei jedem Fensteröffnen geleert, damit ein
+  Schwung jedes Ziel höchstens einmal trifft.
+
+SCHADENSÜBERGABE
+  IDamageable::ReceiveDamage(const FDamage&, AActor* Instigator)
+
+  Vertragsprinzip: Der Angreifer sagt nur, WORAUS der Treffer besteht — niemals,
+  wie sehr er wehtut. Die Mitigation gehört dem Empfänger. Damit braucht ein
+  neuer Zieltyp (Gegner, zerstörbares Objekt, Fass) keine Sonderbehandlung auf
+  der Angreiferseite.
+
+  FDamage trägt AttackStats, ImpactLocation, ImpactNormal, bIsUnblockable,
+  AttackDirection, ForceValue.
+
+  Bei bStartPenetrating (Sweep startet bereits im Ziel) ist die ImpactNormal
+  unbrauchbar; sie wird dann aus der Richtung Angreifer→Trefferpunkt ersetzt,
+  damit Funken nicht in die falsche Richtung sprühen.
+
+  Trifft der Sweep etwas ohne IDamageable, läuft stattdessen der
+  Umgebungspfad (PlayEnvironmentHitFeedback).
+
+MITIGATION (ACharacterBase::ReceiveDamage)
+  ⚠ AKTUELL PLATZHALTER — im Code so markiert. Rein subtraktiv pro Kanal, bei
+  null geclampt, danach die Kanäle summiert. Die echte Mitigationskurve ist eine
+  offene Designentscheidung.
+
+  Die Verteidigungswerte kommen gebündelt über
+  UEquipmentComponent::GetTotalDefenseStats().
+
+  Ebenfalls offen: Angreifer-Attribute wirken noch nicht auf den Schaden — dafür
+  fehlen die Scaling-Daten (Str/Dex-Skalierung pro Waffe).
+
+TREFFERFEEDBACK — ZWEISTUFIGE AUFLÖSUNG
+  Stufe 1: Wer wurde getroffen?
+    Ziel mit IDamageable → das Ziel liefert sein FHitFeedbackChannelSet
+      (über ECreatureType aus USettingsCombatFeedback::TargetFeedbackMap)
+    Welt → PhysicalMaterial → EPhysicalSurface → SurfaceFeedbackMap
+
+  Stufe 2: Welcher Schadenskanal dominiert?
+    ProjectMirrorUtilities::ResolveDominantDamageChannel(MitigatedStats)
+    Nur der dominante Kanal spawnt Effekt und Sound. Ein Feuerschwert erzeugt
+    Feuerfunken, kein Feuer- UND Physisch-Doppelfeedback.
+
+  Sonderfall: Wurde jeder Kanal vollständig absorbiert, ist der dominante Kanal
+  Undefined. Das ist ein eigener Feedback-Fall ("clang", kein Schaden) —
+  deshalb wird der Treffer VOR der Schadensprüfung gemeldet, nicht danach.
+
+  Assets liegen als TSoftObjectPtr in den Settings und werden beim ersten
+  Zugriff in CachedSurfaceFeedbackMap / CachedDefaultSurfaceFeedback aufgelöst
+  (CacheSurfaceFeedback), sonst ruckelt der erste Treffer.
+
+
+================================================================================
+5. ANIMGRAPH-ANBINDUNG
+================================================================================
+
+Die AnimInstance (UAnimInstanceSimple) wird GEPUSHT, nicht gepollt: Zustands-
+wechsel rufen Setter, NativeUpdateAnimation berechnet nur noch Bewegungsgrößen
+(GroundSpeed, FacingDirection, bShouldMove, bIsFalling).
+
+Graph-Kette im ABP:
+  Locomotion-SM (Idle/Walk/Run + Strafing)      → Cache
+  WeaponHandling-SM (Arm-Layer nach Equipment)  → Cache
+  SustainedPoses-SM (Block-/Haltepose)          → Cache
+  MainState → Slot "Default" → Mirror-Zweig → Control Rig → Output
+
+SUSTAINEDPOSES-STATE-MACHINE
+  Drei States: Default (nur die gecachte WeaponHandling-Pose), Sustained_Idle,
+  Sustained_Layered.
+
+  Sustained_Idle (Stand) — Layered blend per bone, Base = cached Pose:
+    Layer 0: spine_01, Blend Depth 3   ← Sustained-Animation
+    Layer 1: clavicle_r, Depth 0       ← NOCHMAL die cached Pose
+    (optional) neck_01 mit Teilgewicht
+
+    Layer 1 ist kein Trick, sondern Notwendigkeit: Branch Filter können einen
+    Teilbaum nur HINZUNEHMEN, nicht ausnehmen. Der nicht-haltende Arm muss
+    deshalb aktiv zurückgeholt werden.
+
+  Sustained_Layered (Bewegung) — nur clavicle_l / Depth 0, plus ein
+    Dämpfungs-Layer auf dem anderen Arm mit Gewicht ~0.4–0.6.
+
+  VIER TRANSITIONEN SIND PFLICHT:
+    Default → Sustained_Idle       bIsSustainingAction && !bShouldMove
+    Default → Sustained_Layered    bIsSustainingAction && bShouldMove
+    Sustained_Idle → Default       !bIsSustainingAction
+    Sustained_Layered → Default    !bIsSustainingAction
+
+    Fehlt die letzte, löst sich der Block beim Laufen erst auf, wenn der Spieler
+    stehen bleibt (der Weg führt dann über den Idle-State). Die Bedingungen
+    müssen sich über bShouldMove gegenseitig ausschließen, statt sich auf die
+    Transitionsreihenfolge zu verlassen.
+
+ENGINE-BEFUNDE (in UE-5.7-Quelle verifiziert, hier festgehalten weil beides
+schon Zeit gekostet hat)
+
+  Blend Masks vererben NICHT an Kindknochen.
+    FAnimationRuntime::CreateMaskWeights (AnimationRuntime.cpp:2442) startet mit
+    AddZeroed und iteriert ausschließlich über explizit angelegte ProfileEntries;
+    GetDefaultBlendScale() ist 0.0 für Masken. Das bRecurse-Flag an
+    SetBoneBlendScale ist eine reine Editor-Schreibhilfe, kein Laufzeitverhalten.
+    → Deshalb werden BRANCH FILTER benutzt, keine Blend Masks. Deren Variante
+      (ab :2422) läuft explizit über alle Nachkommen.
+
+  Blend Depth = clamp((Tiefe + 1) / BlendDepth, 0, 1), nur abwärts im Teilbaum.
+    Depth 0/1 ist ein harter Schnitt bei vollem Gewicht; Depth 3 an spine_01
+    ergibt 0.33 / 0.66 / 1.0. Die Rampe startet nie bei 0. Mehrere Branch Filter
+    in EINEM Layer addieren ihre Gewichte.
+
+  Mesh Space Rotation Blend MUSS an sein (Default ist false,
+  AnimNode_LayeredBoneBlend.h:118).
+    Im lokalen Space landen die Armrotationen der Haltepose unter dem Torso der
+    Locomotion — der Schild steht dann links statt vorne, und die Arme schwingen
+    mit der Spine mit, obwohl sie lokal zu 100 % aus der Haltepose kommen.
+    Root Space Rotation Blend bleibt aus.
+
+  Der Sequence-Pin eines Sequence Players ist zur Laufzeit setzbar
+  (PinHiddenByDefault, kein FoldProperty, AnimNode_SequencePlayer.h:115).
+    Eine zusätzliche Pose kostet damit keine neuen States, nur ein Datenfeld.
+    Die Bone Names der Branch Filter sind dagegen Compile-Zeit-Daten — ein
+    Handwechsel kostet Struktur.
+
+BEKANNTE OPTISCHE SCHWÄCHE
+  Beim Gehen mit erhobenem Schild schwingt der freie Arm unnatürlich: der
+  Gehzyklus ist mit gegenschwingenden Armen authored, der stillstehende
+  Schildarm bricht diese Lesart. Der Dämpfungs-Layer ist ein Regler, kein Fix.
+  Die saubere Lösung ist ein eigener Locomotion-Satz fürs Blocken — dann könnte
+  der Layer im Bewegungs-State ganz entfallen.
+
+
+================================================================================
+OFFENE PUNKTE (Details in OffenePunkte.txt)
+================================================================================
+
+  - Mitigationsformel ist Platzhalter; Angreifer-Attribute wirken nicht
+  - Tod / Stagger fehlen komplett
+  - EndSustainedAction wird bei Waffenwechsel, Levelwechsel und SaveGame-Load
+    nicht gerufen (ClearAllEquipment / SetEquipmentFromSave feuern
+    OnWeaponChanged, aber kein Release)
+  - Charged-Modus: Datenmodell steht, Ausführung fehlt
+  - ESustainedPose::Channel sitzt im falschen Enum — beschreibt einen anderen
+    Mechanismus (bewegungsverhindernde Loop-Montage) und gehört zu
+    EWeaponActionMode
+  - Der Sustained-Zweig liegt VOR dem Default-Slot: eine Angriffsmontage
+    überschreibt die Haltung vollständig. Relevant, sobald
+    bPreservesSustainedAction wirken soll (vertagt, es gibt noch keine Speere)
+  - CancelRunning zertritt den Hanging-State des ClimbComponent
+  - Debug-Scaffolding aus der Trefferkette entfernen

@@ -1,6 +1,6 @@
 ================================================================================
   WORLD EVENT SYSTEM — Dokumentation
-  Stand: 2026-06-23 (Inhalt gegen aktuellen Code geprüft, weiterhin gültig)
+  Stand: 2026-06-25 (Inhalt gegen aktuellen Code geprüft, weiterhin gültig)
 ================================================================================
 
 ÜBERBLICK
@@ -69,6 +69,14 @@ OnInteract-Verhalten (Reihenfolge):
      Liste (BeginPlay-Guard würde sonst sperren), also wird immer addiert.
      Für nicht-OneShot togglet die EventID bei jeder Interaktion.
   5. FireObjectEvent(EventID) → Delegate-Broadcast an Triggerables im selben Level
+
+Transiente Variante (ohne Persistenz):
+  Nicht jedes Interactable nutzt den OnInteract-Pfad. Der Spiegel
+  (AInteractableMysteriousMirror) ruft FireObjectEvent direkt am Subsystem auf
+  und berührt ActivatedObjects bewusst NICHT — seine Events sind reine
+  Laufzeit-Effekte ohne Speicherung. Er wird zudem nicht per Spieler-Input,
+  sondern per Position + Blickrichtung ausgelöst.
+  Details: Docs/MirrorStaircaseSystem.txt.
 
 
 ATriggerableObject
@@ -200,3 +208,33 @@ BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
 3. [BEHOBEN 2026-06-12] InteractableObjectBase::BeginPlay Guard für EventID.IsNone()
    BeginPlay prüft nun `bIsOneTimeInteraction && !EventID.IsNone()` vor dem
    Subsystem-Zugriff.
+
+================================================================================
+  NACHTRAG 2026-07-20
+================================================================================
+
+Das Subsystem speichert inzwischen DREI Sorten Weltzustand (FWorldEventData in
+SaveSystem/SaveGameData.h):
+
+  ActivatedObjects  TArray<FName>              wie bisher: was wurde ausgelöst
+  DroppedItemMap    TMap<FName, FTransform>    abgelegte Items inkl. Position
+  ValueStateMap     TMap<FName, float>         kontinuierliche Zustände
+
+ActivatedObjects und DroppedItemMap schließen sich pro Item GEGENSEITIG AUS: ein
+Gegenstand ist entweder aufgehoben (sein Pickup ist deaktiviert) oder er liegt
+abgelegt in der Welt — nie beides. Das ist die Invariante, an der sich die
+Drop-Persistenz aufhängt.
+
+ValueStateMap trägt Zustände, die nicht "an/aus" sind — aktuell den Füllstand des
+Heilbrunnens (AInteractableHealingDwell). SetFloatState schreibt bewusst NICHT
+sofort auf Disk: der Wert ändert sich pro Frame, solange die Taste gehalten wird.
+Der Flush soll später über ein Raum-Volume laufen (noch nicht gebaut).
+
+ResetWorldState()
+  Wird von StartNewGame gerufen. Ohne diesen Reset erbte ein neues Spiel den
+  Aktivierungszustand der vorherigen Sitzung, wenn man über das Hauptmenü
+  zurückging — die Truhen waren dann schon offen.
+
+Save-Atomizität: Reaktionen müssen idempotent bleiben. Solange das gilt, ist ein
+verlorener Save unkritisch (die Reaktion läuft beim nächsten Laden erneut).
+Kritisch wird es bei Item-Grants, Sequenzketten und One-Shot-Spawns.

@@ -27,18 +27,15 @@ UCLASS()
 class PROJECTMIRROR_API ATriggerableObject : public AActor, public ITriggerable
 {
 	GENERATED_BODY()
-	
+
+protected:
 	UPROPERTY(EditAnywhere)
 	TMap<FName, FEventReactionConfig> EventMap;
 	
 	UPROPERTY(EditAnywhere, meta = (AllowPrivateAccess = true))
 	TObjectPtr<UStaticMeshComponent> MeshComponent;
-
-
-public:
+	
 	ATriggerableObject();
-
-protected:
 	virtual void BeginPlay() override;
 
 public:

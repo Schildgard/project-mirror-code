@@ -1,0 +1,150 @@
+================================================================================
+  CLIMB-SYSTEM (Ledge-Grab / Hängen / Hochziehen) — Dokumentation
+  Stand: 2026-07-20 (Inhalt gegen aktuellen Code geprüft)
+================================================================================
+
+ÜBERBLICK
+---------
+Der Spieler kann sich an Kanten hängen und sich hochziehen. Das System ist
+bewusst klein gehalten: eine Komponente am Charakter, zwei Traces zur Erkennung,
+ein Zustands-Enum und zwei Animationen. Kein Tick — alles läuft über Eingaben und
+AnimNotifies.
+
+Beteiligte Klassen / Daten:
+  - UClimbComponent      (Characters/Components/)  gesamte Logik
+  - FClimbData           (ClimbComponent.h)        Trefferdaten einer Kante
+  - EClimbingState       (Utility/EnumCollection.h) None | Hanging | PullingUp
+  - USettingsCharacter   (Settings/)               sämtliche Toleranzen
+  - UAnimInstanceSimple  (Animation/)              spielt Klettern/Hochziehen
+  - AnimNotify_Climb / AnimNotify_EndClimb (Animation/)
+
+
+================================================================================
+ERKENNUNG — ZWEI TRACES
+================================================================================
+
+CheckClimbableDistance()
+  Sphere-Trace nach vorne (ActorForwardVector * AcceptableForwardDistance,
+  Radius ClimbScanRadius) gegen ClimbableObjectType.
+  Liefert ImpactPoint, ImpactNormal und den getroffenen Actor.
+
+  → beantwortet: "Ist überhaupt eine Wand vor mir?"
+
+CheckClimbableHeight()
+  Setzt auf dem Ergebnis auf. Von der Wandnormale aus wird ein Stück nach INNEN
+  versetzt (EdgeInwardOffset) und von oben nach unten getract.
+
+  Zwei Prüfungen entscheiden:
+    - ImpactNormal.Z >= MinLedgeSurfaceUpDot
+      Die Oberkante muss begehbar flach sein. Ohne das würde eine Schräge oder
+      eine zweite Wandfläche als Kante durchgehen.
+    - HeightDistance zwischen MinHeightToleranceBetweenSocketAndEdge und
+      MaxHeightToleranceBetweenSocketAndEdge
+      Die Kante muss auf greifbarer Höhe liegen — nicht auf Kniehöhe und nicht
+      über Kopf.
+
+  Erst danach wird ClimbLocation auf die tatsächliche Kantenhöhe (LedgeTopZ)
+  korrigiert.
+
+  → beantwortet: "Ist das oben wirklich eine Kante, an die ich greifen kann?"
+
+Sämtliche Toleranzen liegen in USettingsCharacter, nichts ist hartkodiert.
+
+
+================================================================================
+ZUSTANDSMODELL
+================================================================================
+
+EClimbingState: None → Hanging → PullingUp → None
+
+  None       frei beweglich
+  Hanging    hängt an der Kante, an den Kletter-Actor attached, MOVE_Flying
+  PullingUp  Hochzieh-Animation läuft
+
+Warum ein Enum und kein bool: "hängt" und "zieht sich gerade hoch" müssen
+unterscheidbar sein, sonst nimmt die Hochzieh-Eingabe sich selbst erneut an
+(Doppelauslösung) und CancelClimbing kann mitten im Hochziehen fallen lassen.
+
+Jeder Einstiegspunkt prüft den erwarteten Ausgangszustand:
+  HangOnClimbable  nur aus None
+  PullUpFromLedge  nur aus Hanging
+  CancelClimbing   nur aus Hanging  (deshalb kein Abbruch beim Hochziehen)
+  CompleteClimbing idempotent — Early-Out bei None
+
+
+================================================================================
+ABLÄUFE
+================================================================================
+
+ANHÄNGEN
+  1. HangOnClimbable() — beide Traces, Abbruch sobald einer fehlschlägt
+  2. CachedClimbData merken
+  3. TryPlayClimbAnimation() setzt Hanging und startet die Montage
+  4. AnimNotify_Climb ruft SnapOnClimbable() am richtigen Frame
+
+  SnapOnClimbable():
+    StopMovementImmediately + MOVE_Flying
+    Rotation auf die abgeflachte Wandnormale (-FlatWallNormal)
+    AttachToActor(ClimbableActor) — die Kante darf sich bewegen
+    Position = ClimbLocation + Normale*HangBackDistance - Up*HangDownDistance
+    OnClimbStart broadcasten
+
+  FALLBACK: Schlägt das Abspielen der Montage fehl, wird SnapOnClimbable()
+  direkt gerufen. Das ist wichtig — ohne den Fallback bliebe der Charakter im
+  Zustand Hanging, ohne jemals gesnappt zu werden.
+
+HOCHZIEHEN
+  1. HandleClimbingInput: VerticalInput >= 0.5 → PullUpFromLedge()
+  2. Zustand auf PullingUp, Montage starten
+  3. Am Ende der Montage → SnapOnLedgeSurface()
+     Position = ClimbLocation + Inward*SnapOnLedgeForwardOffset
+                              + Up*SnapOnLedgeUpwardOffset
+  4. CompleteClimbing(): Detach, MOVE_Walking, Zustand None, OnClimbEnd
+
+LOSLASSEN
+  HandleClimbingInput: VerticalInput <= -0.5 → CancelClimbing()
+  CompleteClimbing() und anschließend MOVE_Falling.
+
+  Reihenfolge beachtet: erst der gemeinsame Aufräumpfad, dann der abweichende
+  Bewegungsmodus. CompleteClimbing setzt MOVE_Walking, CancelClimbing
+  überschreibt das direkt danach auf Falling.
+
+EINGABE-GATING
+  Solange CurrentClimbingState != None übernimmt HandleClimbingInput die
+  Bewegungsachsen. Die normale Fortbewegung ist in dieser Zeit ausgehängt.
+
+
+================================================================================
+GELÖSTE FALLSTRICKE (Historie, damit sie nicht zurückkommen)
+================================================================================
+
+Snap-Höhe stimmte nicht
+  Ursache war nicht die Berechnung, sondern dass die Notify-Animation nie lief —
+  SnapOnClimbable wurde also nie vom Notify aus aufgerufen. Beim Debuggen einer
+  Positionsformel zuerst prüfen, ob der Aufrufer überhaupt feuert.
+
+Hochziehen brach ab oder feuerte doppelt
+  Zwei Ursachen: PullingUp wurde nie gesetzt (Zustand blieb Hanging, also war
+  CancelClimbing weiter erlaubt), und CompleteClimbing war ungeguardet, lief
+  also mehrfach durch. Beides ist mit dem Enum-Guard und dem Early-Out
+  erschlagen.
+
+
+================================================================================
+OFFENE PUNKTE
+================================================================================
+
+  - Shimmy (seitliches Hangeln) ist vorgesehen, aber nicht gebaut:
+    HandleClimbingInput hat die beiden Horizontalzweige als leere Stubs mit
+    Kommentar. Braucht eine Frontier-Prüfung, sonst hangelt der Spieler über
+    das Ende der Kante hinaus.
+  - Der Greifpunkt sitzt an der Actor-Position, nicht an einem Hand-Socket.
+    Bei stark unterschiedlichen Kantenformen sichtbar ungenau.
+  - Bidirektionale Kopplung ClimbComponent ↔ AnimInstance ist bekannt und
+    bewusst vertagt (beide rufen sich gegenseitig).
+  - URunComponent::CancelRunning zertritt den Hanging-Zustand — Sprint und
+    Klettern kennen einander nicht.
+  - Debug-Scaffolding: beide Traces zeichnen fest mit
+    EDrawDebugTrace::ForDuration (ClimbComponent.cpp:77 und :115). Vor einem
+    Build auf None stellen oder an ein Debug-Flag hängen.
+  - Kein Multiplayer: Zustand und Attachment sind rein lokal, nicht repliziert.

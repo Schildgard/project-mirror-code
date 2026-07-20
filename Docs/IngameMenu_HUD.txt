@@ -148,3 +148,44 @@ SETUP / BLUEPRINT-SEITE (manuell im Editor)
 - Project Settings -> UI Class Settings: HUDLayoutClass,
   InGameMenuClass, InteractionPromptWidgetClass etc. setzen.
 ================================================================
+
+================================================================================
+  NACHTRAG 2026-07-20
+================================================================================
+
+MVVM-PROGRESSBARS FÜR HP UND STAMINA
+
+Kette: AHUDInGame → WidgetHUDLayout → WidgetPlayerHUD → UWidgetProgressbar
+ViewModel: UVMProgressbar (UI/VMProgressbar.h) mit Current / Max / GetPercent,
+Creation Type "Manual", Adapter im AHUDInGame.
+
+WICHTIGE ERFAHRUNG — Editor-Bindings waren nicht haltbar:
+  Die im MVVM-Panel gesetzten Bindings verschwanden bei jedem Editor-Neustart
+  (VerifyImport auf /Script/ModelViewViewModelBlueprint verwarf die Extension).
+  GELÖST durch eine reine C++-FieldNotify-Bindung: AddFieldValueChangedDelegate
+  auf GetPercent, ganz ohne UMVVMView. HP und Stamina sind so PIE-verifiziert.
+
+  VMInteractWidget und VMMenuButton nutzen weiterhin Editor-Bindings und könnten
+  dieselbe Fragilität haben — bei Gelegenheit gegenprüfen.
+
+MITWACHSENDE BALKENBREITE
+  Die Balkenbreite folgt dem MaxValue über ein SizeBox-WidthOverride, LINEAR und
+  proportional. Die Invariante "1 HP = konstante Länge" hält nur ohne Offset und
+  ohne Kurve, weil die Füllung über GetPercent läuft.
+
+  Das trägt ausschließlich dank des Vitality-Caps von 20 (Spanne 130–700, also
+  5,4:1). Bei einem Cap von 99 wäre linear nicht mehr darstellbar — dann müsste
+  auf sqrt umgestellt werden. Der Cap ist im Code NICHT erzwungen; das ist die
+  stillschweigende Annahme hinter der Darstellung.
+
+SITZEN & PAUSEMENÜ
+  Ablauf: Pause-Eingabe → Sitz-Animation → Kamerafahrt → Menü.
+  Der Aufsteh-Bug (Menü ließ sich schließen, während die Animation noch lief)
+  ist über einen IsPlaying-Guard gefixt.
+
+  Empfohlener Refactor, noch nicht gemacht: die verstreuten Zustandswechsel in
+  ein Paar EnterRestingState / ExitRestingState zusammenziehen.
+
+WEITERHIN OFFEN
+  - HUDOutGame nutzt ein HUDLayout mit nur einem Stack (@todo im Code)
+  - Ungenutzter MenuLayer-Stack in WidgetHUDLayout.h

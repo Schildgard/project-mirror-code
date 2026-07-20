@@ -21,7 +21,7 @@ class PROJECTMIRROR_API USubsystemLevelLoading : public UGameInstanceSubsystem
 	UPROPERTY()
 	TObjectPtr<USaveGameData> CachedSaveGame;
 	UPROPERTY()
-	FPlayerConditionData CachedPlayerData;
+	FPlayerDataDiskAndMemory CachedPlayerData;
 	UPROPERTY()
 	FName PendingEntryPoint = NAME_None;
 	UPROPERTY()
@@ -64,9 +64,9 @@ public:
 	void OnPostLevelLoad(UWorld* LoadedLevel);
 	void OnPostNewGameLevelLoad(UWorld* LoadedLevel);
 	void OnPostChangedLevel(UWorld* ChangedLevel);
-	void CachePlayerLevelPersistentData(const FPlayerConditionData& PlayerData);
+	void CachePlayerLevelPersistentData(const FPlayerDataDiskAndMemory& PlayerData);
 	void OnReturnToMainMenuFinished(UWorld* CurrentWorldContext);
-	const FPlayerConditionData& GetPlayerLevelPersistentData()const{return CachedPlayerData;};
+	const FPlayerDataDiskAndMemory& GetPlayerLevelPersistentData()const{return CachedPlayerData;};
 	FName GetPendingEntryPoint() const{return PendingEntryPoint;};
 	void SetPendingEntryPoint(const FName& NewPendingEntryPoint){PendingEntryPoint = NewPendingEntryPoint;};
 };

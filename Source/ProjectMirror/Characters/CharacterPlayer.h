@@ -22,8 +22,7 @@ protected:
 	
 	ACharacterPlayer();
 	virtual void BeginPlay() override;
-	
-	int32 ProvisoricTestStat;
+
 public:
 	
 	virtual void OnCommandSaveData_Implementation(USaveGameData* SaveGameFile) override;
@@ -31,5 +30,5 @@ public:
 	void OnLevelTransitionStart();
 	void OnLevelTransitionEnd();
 	void OnLevelLoadedFromSaveGame(USaveGameData* SaveGame);
-	void SetStatsFromLevelPersistentData(const FPlayerConditionData& CharacterData);
+	void SetStatsFromLevelPersistentData(const FPlayerDataDiskAndMemory& CharacterData);
 };

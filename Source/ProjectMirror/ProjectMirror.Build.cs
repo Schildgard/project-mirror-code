@@ -10,7 +10,7 @@ public class ProjectMirror : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "UMG", "CommonUI", "DeveloperSettings","GameplayTags", "PhysicsCore"  });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "AnimGraphRuntime", "ModelViewViewModel", "MoviePlayer" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "AnimGraphRuntime", "ModelViewViewModel", "MoviePlayer", "Niagara" });
 
 		// Uncomment if you are using Slate UI
 		 PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

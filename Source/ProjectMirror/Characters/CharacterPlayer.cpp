@@ -2,19 +2,15 @@
 
 
 #include "CharacterPlayer.h"
-
-
-#include "Camera/CameraComponent.h"
-#include "GameFramework/SpringArmComponent.h"
 #include "Components/CapsuleComponent.h"
-#include "GameFramework/CharacterMovementComponent.h"
+#include "Components/EquipmentComponent.h"
 #include "ProjectMirror/SubsystemLevelLoading.h"
 #include "ProjectMirror/SaveSystem/SaveGameData.h"
 
 
 ACharacterPlayer::ACharacterPlayer()
 {
-	// Set size for collision capsule// Copyright 2026 Leonard Kemenani. All Rights Reserved.
+	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 
 	CharacterID = TEXT("Player");
@@ -23,7 +19,7 @@ ACharacterPlayer::ACharacterPlayer()
 void ACharacterPlayer::BeginPlay()
 {
 	Super::BeginPlay();
-	
+
 	if (USubsystemLevelLoading* LevelLoadSubsystem = GetGameInstance()->GetSubsystem<USubsystemLevelLoading>())
 	{
 		LevelLoadSubsystem->OnLevelTransitionStart.AddUObject(this, &ACharacterPlayer::OnLevelTransitionStart);
@@ -40,12 +36,26 @@ void ACharacterPlayer::OnCommandSaveData_Implementation(USaveGameData* SaveGameF
 	}
 	Super::OnCommandSaveData_Implementation(SaveGameFile);
 
-	FPlayerTransformData PlayerData;
+	FPlayerDataDiskOnly PlayerData;
 	PlayerData.Location = GetActorLocation();
 	PlayerData.Rotation = GetActorRotation();
 
-	SaveGameFile->SavePlayerTransformData(CharacterID, PlayerData);
-	SaveGameFile->SavePlayerConditionData(CharacterID,FPlayerConditionData{});
+	FPlayerDataDiskAndMemory CurrentPlayerConditionData;
+
+	if (IsValid(EquipmentComponent))
+	{
+		CurrentPlayerConditionData.CurrentEquipment = EquipmentComponent->GetEquipmentForSave();
+	}
+
+	if (IsValid(AttributeComponent))
+	{
+		CurrentPlayerConditionData.PlayerAttributes = AttributeComponent->GetBaseAttributeValues();
+		CurrentPlayerConditionData.CurrentStatCondition.CurrentHealth = AttributeComponent->GetCurrentHealth();
+	}
+	
+	SaveGameFile->SavePlayerStaticData(CharacterID, PlayerData);
+	SaveGameFile->SavePlayerConditionData(CharacterID, CurrentPlayerConditionData);
+	
 }
 
 void ACharacterPlayer::OnCommandLoadData_Implementation(USaveGameData* SaveGameFile)
@@ -55,10 +65,10 @@ void ACharacterPlayer::OnCommandLoadData_Implementation(USaveGameData* SaveGameF
 		return;
 	}
 	Super::OnCommandLoadData_Implementation(SaveGameFile);
-	
-	if (const FPlayerConditionData* PlayerConditionDataPtr = SaveGameFile->GetPlayerConditionData(CharacterID))
+
+	if (const FPlayerDataDiskAndMemory* PlayerConditionDataPtr = SaveGameFile->GetPlayerConditionData(CharacterID))
 	{
-		SetStatsFromLevelPersistentData(* PlayerConditionDataPtr);
+		SetStatsFromLevelPersistentData(*PlayerConditionDataPtr);
 	}
 }
 
@@ -66,9 +76,19 @@ void ACharacterPlayer::OnLevelTransitionStart()
 {
 	if (USubsystemLevelLoading* LevelLoadSubsystem = GetGameInstance()->GetSubsystem<USubsystemLevelLoading>())
 	{
-		FPlayerConditionData CurrentPlayerLevelPersistentData;
-		CurrentPlayerLevelPersistentData.CurrentHP = -1; //Get Values from Character Component
+		FPlayerDataDiskAndMemory CurrentPlayerLevelPersistentData;
+
+		if (IsValid(EquipmentComponent))
+		{
+			CurrentPlayerLevelPersistentData.CurrentEquipment = EquipmentComponent->GetEquipmentForSave();
+		}
 		
+		if (IsValid(AttributeComponent))
+		{
+			CurrentPlayerLevelPersistentData.PlayerAttributes = AttributeComponent->GetBaseAttributeValues();
+			CurrentPlayerLevelPersistentData.CurrentStatCondition.CurrentHealth = AttributeComponent->GetCurrentHealth();
+		}
+
 		LevelLoadSubsystem->CachePlayerLevelPersistentData(CurrentPlayerLevelPersistentData);
 	}
 }
@@ -79,11 +99,11 @@ void ACharacterPlayer::OnLevelLoadedFromSaveGame(USaveGameData* SaveGame)
 	{
 		return;
 	}
-	if (const FPlayerTransformData* PlayerTransformDataPtr = SaveGame->GetPlayerTransformData(CharacterID))
+	if (const FPlayerDataDiskOnly* PlayerTransformDataPtr = SaveGame->GetPlayerStaticData(CharacterID))
 	{
 		SetActorLocationAndRotation(PlayerTransformDataPtr->Location, PlayerTransformDataPtr->Rotation);
 	}
-	if (const FPlayerConditionData* PlayerConditionDataPtr = SaveGame->GetPlayerConditionData(CharacterID))
+	if (const FPlayerDataDiskAndMemory* PlayerConditionDataPtr = SaveGame->GetPlayerConditionData(CharacterID))
 	{
 		SetStatsFromLevelPersistentData(*PlayerConditionDataPtr);
 	}
@@ -94,13 +114,21 @@ void ACharacterPlayer::OnLevelTransitionEnd()
 {
 	if (USubsystemLevelLoading* LevelLoadSubsystem = GetGameInstance()->GetSubsystem<USubsystemLevelLoading>())
 	{
-		const FPlayerConditionData& CachedPlayerData = LevelLoadSubsystem->GetPlayerLevelPersistentData();
+		const FPlayerDataDiskAndMemory& CachedPlayerData = LevelLoadSubsystem->GetPlayerLevelPersistentData();
 		SetStatsFromLevelPersistentData(CachedPlayerData);
 	}
 }
 
-void ACharacterPlayer::SetStatsFromLevelPersistentData(const FPlayerConditionData& CharacterData)
+void ACharacterPlayer::SetStatsFromLevelPersistentData(const FPlayerDataDiskAndMemory& CharacterData)
 {
-	//Set Character Stats
-	ProvisoricTestStat = CharacterData.CurrentHP;
+	
+	if (IsValid(AttributeComponent))
+	{
+		AttributeComponent->InitializeFromSave(CharacterData.PlayerAttributes, CharacterData.CurrentStatCondition.CurrentHealth);
+	}
+
+	if (IsValid(EquipmentComponent))
+	{
+		EquipmentComponent->SetEquipmentFromSave(CharacterData.CurrentEquipment);
+	}
 }

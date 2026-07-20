@@ -5,7 +5,6 @@
 
 #include "Animation/AnimInstanceSimple.h"
 #include "Components/SphereComponent.h"
-#include "GameFramework/Character.h"
 #include "Interfaces/Interactable.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetMathLibrary.h"
@@ -38,7 +37,7 @@ void UInteractionComponent::RegisterRadiusEnter(UPrimitiveComponent* OverlappedC
 	{
 		return;
 	}
-	if (!IInteractable::Execute_IsInterActionPossible(OtherActor))
+	if (!IInteractable::Execute_IsInterActionPossible(OtherActor, this))
 	{
 		return;
 	}
@@ -63,14 +62,16 @@ void UInteractionComponent::RegisterRadiusExit(UPrimitiveComponent* OverlappedCo
 
 void UInteractionComponent::Interact()
 {
-	if (!IsValid(CurrentInteractable))
+	if (!IsValid(CachedInteractable))
 	{
 		return;
 	}
-	if (IInteractable::Execute_IsInterActionPossible(CurrentInteractable))
+	
+	if (IInteractable::Execute_IsInterActionPossible(CachedInteractable, this))
 	{
-		IInteractable::Execute_OnInteract(CurrentInteractable);
+		IInteractable::Execute_OnInteract(CachedInteractable, this);
 	}
+	CachedInteractable = nullptr;
 }
 
 void UInteractionComponent::AddInteractable(AActor* InteractableActor)
@@ -113,19 +114,48 @@ EInteractionCategory UInteractionComponent::GetCurrentInteractionType() const
 	return IInteractable::Execute_GetInteractionCategory(CurrentInteractable);
 }
 
+EInteractionHeight UInteractionComponent::ResolveInteractionHeight() const
+{
+	AActor* Owner = GetOwner();
+	AActor* Interactable = CurrentInteractable;
+	if (!IsValid(Owner) || !IsValid(Interactable))
+	{
+		return EInteractionHeight::Mid;
+	}
+	
+	float DistanceTolerance = 40.f;
+	if (const USettingsCharacter* SettingsCharacter = GetDefault<USettingsCharacter>())
+	{
+		DistanceTolerance = SettingsCharacter->InteractionHeightDistanceTolerance;
+	}
+
+	const float PlayerMidPoint = Owner->GetActorLocation().Z;
+	const float InteractionPoint = Interactable->GetActorLocation().Z;
+
+	if (InteractionPoint + DistanceTolerance < PlayerMidPoint)
+	{
+		return EInteractionHeight::Low;
+	}
+	if (InteractionPoint > PlayerMidPoint + DistanceTolerance)
+	{
+		return EInteractionHeight::High;
+	}
+	return EInteractionHeight::Mid;
+}
+
 void UInteractionComponent::SnapActorToCurrentInteractable()
 {
 	AActor* Owner = GetOwner();
 	USceneComponent* SnapTargetComponent = IInteractable::Execute_GetInteractionSnapTargetComponent(CurrentInteractable);
-	
-	if (!IsValid(SnapTargetComponent))
+
+	if (!IsValid(Owner) || !IsValid(SnapTargetComponent))
 	{
 		return;
 	}
-	const FVector SnapLocation = SnapTargetComponent->GetComponentLocation(); 
-	const FRotator LookAt  = UKismetMathLibrary::FindLookAtRotation(SnapLocation, CurrentInteractable->GetActorLocation());
+	FVector SnapLocation = SnapTargetComponent->GetComponentLocation();
+	SnapLocation.Z = Owner->GetActorLocation().Z;
+	const FRotator LookAt = UKismetMathLibrary::FindLookAtRotation(SnapLocation, CurrentInteractable->GetActorLocation());
 	const FRotator TargetRotation = FRotator{0.f, LookAt.Yaw, 0.f};
 	Owner->SetActorRotation(TargetRotation);
-	Owner->SetActorLocation(SnapLocation, false, nullptr, ETeleportType::TeleportPhysics);
-	
+	Owner->SetActorLocation(SnapLocation, true, nullptr, ETeleportType::TeleportPhysics);
 }

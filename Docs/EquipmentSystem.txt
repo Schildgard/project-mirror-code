@@ -1,0 +1,340 @@
+================================================================================
+  EQUIPMENT- & WEAPON-SYSTEM — Dokumentation
+  Stand: 2026-07-20 (Inhalt gegen aktuellen Code geprüft)
+================================================================================
+
+ÜBERBLICK
+---------
+Das Equipment-System rüstet Charaktere mit Items (Waffen, Schilde, Fackeln,
+später Rüstung) aus und stellt sie visuell am Mesh dar. Es ist daten-getrieben:
+ein Item ist ein DataAsset (UDefinitionEquipment), das Slot, Darstellungsart,
+Visual-Assets und Kampfwerte beschreibt. Die Logik (Spawnen, Attachen,
+Slot-Auflösung, Waffenwechsel, Ablegen, Save) liegt in einer Komponente am
+Charakter (UEquipmentComponent).
+
+Aufgehoben wird Equipment über Welt-Pickups (AInteractablePickupObject).
+Ausgerüstetes Equipment, abgelegte Items und der Zustand von Waffeneffekten
+(brennende Fackel) sind save- und levelwechsel-persistent.
+
+Beteiligte Klassen / Daten:
+  - UEquipmentComponent       (Characters/Components/)   Kern-Logik, Slot-Verwaltung
+  - UDefinitionItem           (Data/)                    abstrakte Item-Basis (DataAsset)
+  - UDefinitionEquipment      (Data/)                    Equipment-Definition (erbt Item)
+  - AEquipmentBase            (Objects/Equipment/)       abstrakte Actor-Basis
+  - AEquipmentStatic / AEquipmentSkeletal                Darstellungsvarianten
+  - AWeaponStaticBase         (Objects/Equipment/Weapons/) Waffe mit Hitbox
+  - AWeaponTorchSimple        (Objects/Equipment/Weapons/) Fackel
+  - UEffectComponentBase / UWeaponEffect / UWeaponEffectBurn (StatusEffects/)
+  - AInteractablePickupObject (Objects/)                 Welt-Pickup
+  - UAnimInstanceSimple       (Animation/)               reagiert auf Waffenwechsel
+  - FSavedEquipmentData / FSavedEffectData (SaveSystem/SaveGameData.h)
+  - EEquipmentSlot / EWeaponType (Utility/EnumCollection.h)
+
+
+================================================================================
+DATENMODELL (DataAssets)
+================================================================================
+
+UDefinitionItem (Abstract, UPrimaryDataAsset)
+  Gemeinsame Item-Basis — nicht nur für Equipment gedacht:
+    ItemName, ItemTexture, ItemDescription,
+    WorldPickUpMesh (TSoftClassPtr<AInteractablePickupObject>) — welche
+      Pickup-Actor-Klasse dieses Item in der Welt repräsentiert.
+
+UDefinitionEquipment : UDefinitionItem
+    DesiredEquipmentSlot (EEquipmentSlot)  gewünschter Ziel-Slot
+    DesiredBackupSlot    (EEquipmentSlot)  wohin es beim Verstauen wandert
+    bIsWeapon            (bool)            Waffe oder Rüstung
+    bIsFlexible          (bool)            skeletal (mitverformend) oder statisch
+    WeaponType           (EWeaponType)     Shortsword/Longsword/Greatsword/
+                                           Shield/Torch/None — steuert Anim-Layer
+    AttackStats / BlockStats               nur bei bIsWeapon
+    DefenseStats                           nur bei Rüstung
+    NormalAction / HeavyAction (FWeaponAction)  siehe CombatSystem.txt
+    WeaponSwingSound
+    StaticEquipmentClass / SkeletalEquipmentClass  je nach bIsFlexible
+    AttachSocket
+
+  EditConditionHides hält das Detailpanel sauber: pro Kombination aus bIsWeapon
+  und bIsFlexible ist nur das jeweils relevante Feld sichtbar.
+
+EEquipmentSlot:  Undefined, Head, Body, Arms, Legs, MainHand, OffHand,
+                 TwoHanded, BackupPrimary, BackupSecondary, BackupTwoHanded
+EWeaponType:     None, Torch, Shortsword, Longsword, Greatsword, Shield
+
+  HINWEIS: Es gibt keinen EEquipmentVisualType mehr. Die Darstellungsart ergibt
+  sich aus bIsFlexible plus der jeweiligen Actor-Klasse.
+
+TODO (vertagt 2026-07-19): UDefinitionWeapon von UDefinitionEquipment ableiten.
+  Inzwischen sind so viele Felder waffen-only, dass EditConditionHides die
+  schlechtere Lösung gegenüber echter Vererbung ist.
+
+
+================================================================================
+ACTOR-HIERARCHIE
+================================================================================
+
+  AEquipmentBase (Abstract)
+    ├── AEquipmentStatic
+    │     └── AWeaponStaticBase          (+ Angriffs-Hitbox als Capsule)
+    │           └── AWeaponTorchSimple
+    └── AEquipmentSkeletal               (folgt der Charakteranimation)
+
+AEquipmentBase hält:
+  SourceDefinition + durchreichende Getter GetAttackStats/GetDefenseStats/
+    GetBlockStats. Diese Accessor-Ebene existiert, damit später Instanz-
+    modifikatoren (Verzauberung, Abnutzung) eingeschoben werden können, ohne
+    jeden Aufrufer anzufassen — teuer nachzurüsten wäre der Zugriffsweg, nicht
+    das Feld.
+  AttachToOwner(OwnerMesh, Socket) — virtuell. Statisches Equipment hängt sich
+    an einen Socket, skeletales setzt zusätzlich SetLeaderPoseComponent. Der
+    Aufrufer muss den Unterschied nicht kennen.
+  BeginDrop(Bundle) — Übergang in den Welt-Zustand beim Ablegen.
+  OnSlotChanged(NewSlot) — Reaktion auf Umhängen (z.B. Hitbox deaktivieren).
+  Effekt-API: GetEquipmentEffectsForSave / ApplyEffectsFromSave /
+    FindEffectOfClass / ApplyInitialEffectStates.
+
+WICHTIG: Die Angriffs-Hitbox sitzt auf AWeaponStaticBase, NICHT auf
+AEquipmentBase — nur Waffen haben eine. Rüstung und Fackelhalter brauchen keine.
+
+Gespawnt wird ausschließlich über SpawnActorDeferred → SetSourceDefinition →
+FinishSpawning → AttachToOwner. Es gibt genau eine Spawn-Stelle
+(SpawnEquipmentActor), damit diese Reihenfolge nicht mehrfach gepflegt werden
+muss: ohne gesetzte SourceDefinition vor FinishSpawning läuft BeginPlay ohne
+Werte.
+
+
+================================================================================
+UEquipmentComponent — Kern
+================================================================================
+
+Anlage:
+  In ACharacterBase-Konstruktor als DefaultSubobject — jeder Charakter hat eine
+  EquipmentComponent. Tick aus (rein event-getrieben). BeginPlay cached den
+  Owner-SkeletalMesh.
+
+Interner Zustand:
+  CurrentEquipmentMap          Slot -> FEquipmentBundle
+  TemporaryHiddenEquipmentMap  Slot -> FEquipmentBundle  (Pickup-Choreografie)
+  TotalDefenseStats            aufsummierte Verteidigung aller Slots
+
+  FEquipmentBundle { EventID, Definition, EquipmentActor }
+
+  EINE Bündel-Map statt früher drei paralleler Maps (Definition / Mesh / Actor).
+  Drei Maps mussten bei jeder Operation synchron gehalten werden; jede vergessene
+  Stelle war ein stiller Inkonsistenzfehler. Die EventID im Bündel verbindet ein
+  ausgerüstetes Item mit seinem Welt-Pickup, damit dessen Aufgehoben-Zustand beim
+  Ablegen wieder aufgelöst werden kann.
+
+Sockets (Konstanten in der .cpp):
+  HandGrip_R        MainHand / TwoHanded
+  HandGrip_L        Off-Hand-Waffe (kein Schild)
+  HandGrip_Shield   OffHand + WeaponType == Shield
+  PelvisGrip        BackupPrimary
+  BackGrip          BackupTwoHanded / BackupSecondary (kein Schild)
+  BackGrip_Shield   BackupSecondary + Schild
+
+Delegates:
+  OnEquipmentChanged(EEquipmentSlot)
+  OnWeaponChanged(EWeaponType, bool bIsOffHand)
+
+
+--------------------------------------------------------------------------------
+EquipAndReturnResolvedSlot(Definition, EventID, bHideEquipmentOnSpawn)
+--------------------------------------------------------------------------------
+1. Zielslot über ResolveEquipmentSlot(Definition) bestimmen.
+2. Belegung räumen (Austausch bzw. beide Hände bei TwoHanded).
+3. Actor spawnen und attachen (SpawnEquipmentActor).
+4. Bündel in CurrentEquipmentMap, OnEquipmentChanged broadcasten.
+5. Bei Waffen zusätzlich OnWeaponChanged(WeaponType, bIsOffHand).
+6. UpdateDefenseStats().
+
+Der Rückgabewert ist der TATSÄCHLICH belegte Slot — der Aufrufer muss die
+Loadout-Regel nicht kennen, bekommt das Ergebnis aber zurück (z.B. um die
+passende — ggf. gespiegelte — Aufheb-Animation zu wählen).
+
+bHideEquipmentOnSpawn spawnt unsichtbar; sichtbar wird das Item erst über die
+Pickup-Choreografie (s.u.).
+
+--------------------------------------------------------------------------------
+ResolveEquipmentSlot(Definition) — die Loadout-Regel
+--------------------------------------------------------------------------------
+Bildet den gewünschten Slot auf einen tatsächlich sinnvollen ab:
+
+  Nicht-Waffen                → DesiredEquipmentSlot unverändert
+  Schild                      → IMMER OffHand
+  Zweihänder                  → TwoHanded, wenn beide Hände frei
+  Einhandwaffe, MainHand frei → MainHand
+  Einhandwaffe, OffHand frei  → OffHand   (Dual-Wielding)
+  sonst                       → passender Backup-Slot bzw. Austausch
+
+Daraus ergeben sich Dual-Wielding, Two-Handing (räumt beide Hände) und die
+Backup-Ablage, ohne dass der Aufrufer davon weiß.
+
+FindViableBackupSlot ergänzt das fürs Verstauen: Schilde können nur in
+BackupSecondary (dort hängt der Schild-Socket), Zweihänder nur auf den Rücken.
+
+--------------------------------------------------------------------------------
+Waffenwechsel
+--------------------------------------------------------------------------------
+HandleSwitchWeaponInput → SwapWeapons(ActiveSlot) → DrawFromBackupSlot(Hand)
+                        → SwapWeaponSlots(SlotA, SlotB) / PlaceEquipmentInSlot
+
+DrawFromBackupSlot prüft dabei explizit, dass kein Schild in die rechte Hand
+gezogen wird (`!(bIsRightHand && IsShieldInSlot(...))`).
+
+--------------------------------------------------------------------------------
+Ablegen
+--------------------------------------------------------------------------------
+DropEquipment(Bundle) / DiscardMainWeapon() / DiscardOffWeapon()
+  Der ausgerüstete Actor wird nicht einfach zerstört, sondern über
+  AEquipmentBase::BeginDrop in den Weltzustand überführt.
+
+  Die Drop-PHYSIK liegt bewusst beim Pickup-Actor, nicht beim Equipment-Actor:
+  in der Welt liegende Items sind Pickups, und nur dort braucht es Kollision,
+  Dämpfung und Snap-Verhalten.
+
+  Fallstricke, die dabei behoben wurden (nicht wieder einbauen):
+    - Sweep + Z-Clamp beim Boden-Snap, sonst versinken Items in Geometrie
+    - CCD + per-Slot-Dämpfung, sonst tunneln schnelle Drops
+    - Geburts-Overlap-Guard: ein Item, das im Spieler entsteht, wird vor ihm
+      neu platziert statt weggeschleudert
+
+
+================================================================================
+PICKUP-CHOREOGRAFIE (Sichtbarkeit)
+================================================================================
+
+Problem: Beim Aufheben soll das Item erst in der Hand erscheinen und dann — je
+nach Zielslot — an Gürtel oder Rücken wandern, ohne dass irgendwo zwei Kopien
+gleichzeitig sichtbar sind.
+
+Lösung: Proxy in der Hand + unsichtbares echtes Item am Zielslot, gesteuert über
+ZWEI AnimNotifies:
+
+  AnimNotify_HideEquipment  → MarkEquipmentForHide(Slot)
+      versteckt das betroffene Equipment (wandert in
+      TemporaryHiddenEquipmentMap) genau am Verdeckungsframe
+  AnimNotify_ShowEquipment  → MarkEquipmentForShow(Slot)
+      committet am Verstau-Frame
+
+  CommitPickupVisuals() räumt am Ende der Montage auf,
+  ShowAllHiddenEquipment() ist das Sicherheitsnetz.
+
+Beim Aufheben in einen Backup-Slot dient der WorldPickUpActor selbst als Proxy
+in der Hand (bIsStowProxy), damit die Animation etwas zu halten hat.
+
+HideActiveWeaponsForInteraction(Kategorie, Zielslot) blendet aktive Waffen für
+die Dauer einer Interaktion aus (man greift nicht mit vollen Händen in eine
+Truhe).
+
+
+================================================================================
+WAFFENEFFEKTE (Fackel)
+================================================================================
+
+Effekte hängen als UEffectComponentBase-Ableitungen (SceneComponent) am
+Equipment-Actor, Niagara am Socket "EffectSocket".
+
+  UEffectComponentBase   bIsEffectActive + SetEffectActive/OnActivated/
+                         OnDeactivated
+  UWeaponEffect          Basis für waffengebundene Effekte
+  UWeaponEffectBurn      Feuer (Fackel)
+
+Der Zustand lebt auf der Komponente selbst, nicht auf der Waffe — dadurch kann
+eine Waffe mehrere unabhängig schaltbare Effekte tragen.
+
+Level-platzierte Waffen können ihren Startzustand pro Instanz vorgeben
+(EditAnywhere-TMap → ApplyInitialEffectStates). Fallstrick: Key ist die exakte
+Effektklasse, eine Basisklasse trifft nicht.
+
+Anzünden/Löschen läuft rein interaktionsgetrieben über IIgnitable
+(Ignite/Extinguish/IsIgnited). Welche Waffe angezündet wird, entscheidet
+ResolveIgnitableSlot(bWantIgnitedWeapon) — MainHand vor OffHand, und für die
+gespiegelte Anzünd-Animation wird gezielt nach der bereits brennenden bzw. der
+noch nicht brennenden Waffe gesucht. Details: Docs/InteractionSystem.txt.
+
+
+================================================================================
+KAMPFWERTE
+================================================================================
+
+UpdateDefenseStats() summiert die DefenseStats aller belegten Slots in
+TotalDefenseStats; GetTotalDefenseStats() liefert sie an ACharacterBase::
+ReceiveDamage. Angriffswerte werden NICHT gecacht, sondern pro Schwung von der
+aktiven Waffe geholt — bei zwei unterschiedlichen Waffen in den Händen wäre ein
+gecachter Gesamtwert schlicht falsch.
+
+Details zur Verwendung: Docs/CombatSystem.txt.
+
+
+================================================================================
+PERSISTENZ (Save & Levelwechsel)
+================================================================================
+
+FSavedEquipmentData pro Slot:
+  Definition (Asset-Referenz), EventID, Effektzustände (TArray<FSavedEffectData>)
+
+Speichern:   GetEquipmentForSave()
+Laden:       SetEquipmentFromSave(SavedEquipment)
+
+  SetEquipmentFromSave rüstet DIREKT IN DEN GESPEICHERTEN SLOT aus und ruft
+  ResolveEquipmentSlot NICHT erneut auf. Das ist der Fix für einen älteren Bug:
+  beim Iterieren einer ungeordneten Map mit erneuter Slot-Auflösung konnten zwei
+  Einhandwaffen Haupt- und Nebenhand tauschen. (PIE-verifiziert 2026-07-03.)
+
+Abgelegte Items in der Welt liegen in einer eigenen DroppedItemMap. Diese und
+ActivatedObjects schließen sich gegenseitig aus: ein Item ist entweder
+aufgehoben (Pickup deaktiviert) oder liegt abgelegt in der Welt, nie beides.
+
+Weil nur Asset-Referenzen und Zustandsflags gespeichert werden, bleibt der Save
+schlank und enthält keine Laufzeitobjekte.
+
+
+================================================================================
+ANIMATIONS-INTEGRATION
+================================================================================
+
+UAnimInstanceSimple::NativeBeginPlay bindet OnWeaponChanged →
+HandleWeaponChange, das RightHandWeapon / LeftHandWeapon (EWeaponType) setzt.
+Die WeaponHandling-State-Machine im AnimBlueprint wählt darüber die Arm-Layer
+pro Hand.
+
+Gespiegelte Aufheb-Animation: Landet das Item laut Slot-Auflösung in der
+Off-Hand, wird die Take-Montage gespiegelt abgespielt (bMirrorCurrentMontage),
+sodass der Charakter mit links greift.
+
+BroadcastHandState() stellt den Anim-Zustand nach Ladevorgängen wieder her.
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. FEquipmentBlend ist toter Code
+   Der Struct steht noch in EquipmentComponent.h:21, wird aber nirgends im
+   Projekt benutzt (der frühere Attach-Blend beim Aufheben ist durch die
+   Proxy-/Notify-Choreografie ersetzt worden). Entfernen.
+
+2. Pickup nimmt fest Equipment an (InteractablePickupObject, @todo)
+   Für Nicht-Equipment-Items / Inventar braucht es eine Verzweigung bzw. ein
+   InventoryComponent.
+
+3. Synchrones Laden der Visual-Assets
+   LoadSynchronous für Meshes. Bei großen Assets ggf. auf StreamableManager
+   umstellen — analog zum BGM-System.
+
+4. EquipmentComponent an JEDEM Charakter
+   Bewusst fürs Framework, aber Overhead bei NPCs, die nie etwas ausrüsten.
+
+5. Skeletale Rüstung ist erst zur Hälfte da
+   AEquipmentSkeletal existiert; das Ausblenden verdeckter Körperteile
+   (Mask-Blend über kanal-gepackte Regionsmaske, Hide_*-Scalars via DMI) ist
+   entworfen, aber weder Material-Graph noch C++-Wiring sind gebaut.
+
+6. Waffenwechsel während laufender Kampfaktion
+   ClearAllEquipment / SetEquipmentFromSave feuern OnWeaponChanged, rufen aber
+   kein EndSustainedAction — eine gehaltene Aktion überlebt damit Levelwechsel
+   und SaveGame-Load. Zusammen mit Tod/Stagger nachziehen (s. CombatSystem.txt).
+
+7. UDefinitionWeapon-Ableitung vertagt (s.o. Datenmodell).

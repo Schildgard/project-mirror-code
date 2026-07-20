@@ -6,6 +6,12 @@
 #include "EngineUtils.h"
 #include "SubsystemLevelLoading.h"
 #include "GameFramework/PlayerStart.h"
+#include "UI/HUDInGame.h"
+
+AGameModePlayable::AGameModePlayable(const FObjectInitializer& ObjectInitializer)
+{
+		HUDClass = AHUDInGame::StaticClass();
+}
 
 void AGameModePlayable::BeginPlay()
 {

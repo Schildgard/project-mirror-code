@@ -169,3 +169,47 @@ BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
 
 3. LockOn: Interpolationsgeschwindigkeit hartcodiert (RInterpTo, 10.f,
    LockOnComponent.cpp). Soll aus den Settings kommen (siehe OffenePunkte.txt).
+
+================================================================================
+  NACHTRAG 2026-07-20
+================================================================================
+
+NEUE INTERAKTIONSKATEGORIE: Ignite
+  Fackel an einer Feuerstelle anzünden (AInteractableFireplace) bzw. löschen.
+  Rein interaktionsgetrieben über das Interface IIgnitable
+  (Ignite / Extinguish / IsIgnited).
+
+  Entscheidung liegt bei der Feuerstelle, nicht beim Charakter: sie fragt über
+  UEquipmentComponent::ResolveIgnitableSlot(bWantIgnitedWeapon) nach der
+  passenden Waffe. Der Bool unterscheidet "ich suche eine brennende Waffe"
+  (zum Löschen) von "ich suche eine nicht brennende" (zum Anzünden) — nötig,
+  damit die gespiegelte Anzünd-Animation zur richtigen Hand passt.
+
+  IsInterActionPossible bekommt dafür den Interaktor übergeben (Weg A), weil die
+  Frage "kann ich hier interagieren" ohne den Gegenüber nicht beantwortbar ist.
+
+  OFFEN: Die Slot-Auflösung wird an zwei Stellen gerechnet (Feuerstelle und
+  Charakter). Sollte über IInteractable auf eine Quelle zusammengeführt werden.
+
+NEU: AInteractableHealingDwell
+  Heilbrunnen, der beim HALTEN der Taste heilt statt bei einem Tastendruck.
+  Zwei getrennte Eigenschaften HealCapacity und InitialCapacity, weil ein
+  Brunnen auch halbleer starten darf.
+
+  UAttributeComponent::IncreaseCurrentHealth gibt die TATSÄCHLICH angewandte
+  Heilung zurück — nur so kann der Brunnen genau den Betrag von seinem Vorrat
+  abbuchen, der wirklich gewirkt hat (bei vollem Leben also nichts).
+
+  Der Füllstand liegt in der ValueStateMap des ObjectEvents-Subsystems
+  (Docs/WorldEventSystem.txt). Disk-Round-Trip PIE-verifiziert;
+  Levelwechsel-Verhalten noch ungetestet.
+
+SICHTBARKEIT WÄHREND DER INTERAKTION
+  UEquipmentComponent::HideActiveWeaponsForInteraction blendet getragene Waffen
+  für die Dauer einer Interaktion aus — man greift nicht mit vollen Händen in
+  eine Truhe. Die Pickup-Choreografie mit Proxy-Objekt und zwei AnimNotifies ist
+  in Docs/EquipmentSystem.txt beschrieben.
+
+WEITERHIN OFFEN
+  - TOCTOU zwischen TriggerInteraction und AnimNotify_Interact (s. OffenePunkte)
+  - IsInterActionPossible ist edge-getriggert, wird nie gepollt → stale Prompt

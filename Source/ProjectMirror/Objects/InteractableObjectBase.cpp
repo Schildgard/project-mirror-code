@@ -26,7 +26,7 @@ void AInteractableObjectBase::BeginPlay()
 	}
 }
 
-void AInteractableObjectBase::OnInteract_Implementation()
+void AInteractableObjectBase::OnInteract_Implementation(UInteractionComponent* InteractingComponent)
 {
 	if (EventID.IsNone())
 	{
@@ -65,11 +65,13 @@ FName AInteractableObjectBase::GetInteractionPrompt_Implementation()
 		return TEXT("Press E to Open");
 	case EInteractionCategory::Close:
 		return TEXT("Press E to Close");
+	case EInteractionCategory::Ignite:
+		return TEXT("Press E to Ignite");
 	default: return NAME_None;
 	}
 }
 
-bool AInteractableObjectBase::IsInterActionPossible_Implementation()
+bool AInteractableObjectBase::IsInterActionPossible_Implementation(UInteractionComponent* InteractionComponent)
 {
 	return bIsInteractionPossible;
 }

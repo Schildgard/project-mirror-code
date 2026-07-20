@@ -230,7 +230,7 @@ void USubsystemLevelLoading::OnPostChangedLevel(UWorld* ChangedLevel)
 	}
 }
 
-void USubsystemLevelLoading::CachePlayerLevelPersistentData(const FPlayerConditionData& PlayerData)
+void USubsystemLevelLoading::CachePlayerLevelPersistentData(const FPlayerDataDiskAndMemory& PlayerData)
 {
 	CachedPlayerData = PlayerData;
 }

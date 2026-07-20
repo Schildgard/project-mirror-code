@@ -22,29 +22,51 @@ protected:
 	virtual void BeginPlay() override;
 	
 	UPROPERTY(EditAnywhere)
-	USphereComponent* MirrorSpawnRadius;
-	//@todo: repalce Despawnradius with sphere or box component for precision
+	TObjectPtr<USphereComponent> MirrorSpawnRadius;
+	
 	UPROPERTY(EditAnywhere)
-	UBoxComponent* MirrorDespawnRadius;
+	TObjectPtr<UBoxComponent> MirrorDespawnRadius;
+	
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<USceneComponent> MirrorPlaneComponent;
+	
+	UPROPERTY(EditAnywhere)
+	TObjectPtr<USceneCaptureComponent2D> ReflectiveComponent;
 	
 	bool bIsPlayerFacingTowardsMirror;
-	bool bIsStaircaseVisible;
-	bool bIsPlayerInRegisterRadius;
+	
+	bool BIsMirroredObjectVisible;
+	
+	bool bIsPlayerInInnerRadius;
+	
+	bool bIsPlayerInOuterRadius;
+	
+	bool bIsPlayerInRange;
+	
+	const FName ActivateEventID = TEXT("OnMirrorFocus");
+	const FName DeactivateEventID= TEXT("OnMirrorFocusLost");
 	
 	UPROPERTY()
 	TObjectPtr<AActor> CachedPlayerActor;
 
 	UFUNCTION()
-	void RegisterRadiusEnter(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
-
+	void RegisterInnerRadiusEnter(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
 	UFUNCTION()
-	void RegisterRadiusExit(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+	void RegisterOuterRadiusEnter(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex, bool bFromSweep, const FHitResult& SweepResult);
+	
+	UFUNCTION()
+	void RegisterInnerRadiusExit(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+	UFUNCTION()
+	void RegisterOuterRadiusExit(UPrimitiveComponent* OverlappedComponent, AActor* OtherActor, UPrimitiveComponent* OtherComp, int32 OtherBodyIndex);
+	
+	void UpdateReflection();
+	
 	
 public:
 	virtual void Tick(float DeltaTime) override;
 	bool CheckPlayerFacingTowardsMirror();
 	
-	void ShowStaircase();
-	void HideStaircase();
+	void TriggerActivateEvent();
+	void TriggerDeactivateEvent();
 	
 };

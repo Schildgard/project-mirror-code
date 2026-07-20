@@ -157,3 +157,31 @@ BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
    Ein früherer Crash beim Levelwechsel aus dem Pausemenü (dangling Raw-Pointer
    im Timer-Payload) wurde durch Verwendung von TWeakObjectPtr im
    PauseMusicAfterFadeOut-Payload behoben.
+
+================================================================================
+  NACHTRAG 2026-07-20
+================================================================================
+
+GEBIETSSPEZIFISCHE MUSIK — AVolumeBgmArea (GameWorld/VolumeBgmArea.h)
+
+Ein Volume, das beim Betreten einen eigenen BGM-Track auf den Stack legt und ihn
+beim Verlassen wieder entfernt. Enter/Exit sind im USubsystemBgm implementiert
+und nutzen dieselbe Push/Pop-Semantik wie das Pausemenü.
+
+Die Sound-Referenz ist bewusst eine HARTE USoundBase-Referenz, keine
+TSoftObjectPtr: eine asynchrone zweite Stufe wurde entworfen und wieder
+verworfen. Beim Betreten eines Gebiets muss die Musik sofort einsetzen — ein
+Ladevorgang mitten im Übergang ist genau das, was man nicht will. Die Kosten
+trägt stattdessen das Level-Laden.
+
+Bekannte Lücke (bewusst offen): Grenzen zwei Gebietsvolumen direkt aneinander,
+kann es beim Wechsel einen Frame lang keinen aktiven Gebiets-Track geben. Solange
+Gebiete sich nicht berühren, tritt das nicht auf.
+
+Perspektivisch soll die gesamte BGM über Areas laufen statt über die
+Level-Zuordnung in USettingsSound.
+
+STABILITÄTSFIX
+  Der Levelwechsel aus dem Pausemenü heraus konnte crashen: die Timer-Payload
+  hielt einen rohen Zeiger auf ein Objekt, das der Levelwechsel bereits zerstört
+  hatte. Ersetzt durch TWeakObjectPtr.

@@ -31,14 +31,15 @@ protected:
 	UPROPERTY(EditAnywhere)
 	bool bIsOneTimeInteraction = true;
 	
-	virtual void OnInteract_Implementation() override;
+	virtual void OnInteract_Implementation(UInteractionComponent* InteractingComponent) override;
 	
 public:
 	UPROPERTY()
 	FOnInteractionDisabled OnInteractionDisabled;
 	virtual FOnInteractionDisabled& GetOnInteractionDisabledDelegate() override;
 	virtual FName GetInteractionPrompt_Implementation() override;
-	virtual bool IsInterActionPossible_Implementation() override;
+	virtual bool IsInterActionPossible_Implementation(UInteractionComponent* InteractionComponent) override;
 	virtual EInteractionCategory GetInteractionCategory_Implementation() override;
 	virtual USceneComponent* GetInteractionSnapTargetComponent_Implementation() override;
+	FName GetEventID()const{return EventID;}
 };

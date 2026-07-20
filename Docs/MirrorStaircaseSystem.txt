@@ -1,0 +1,239 @@
+================================================================================
+  SPIEGEL & BLENDBARE TREPPE — Dokumentation
+  Stand: 2026-06-29 (Inhalt gegen aktuellen Code geprüft)
+================================================================================
+
+ÜBERBLICK
+---------
+Das Spiegel-/Treppen-System ist die erste konkrete Spielmechanik, die auf dem
+World-Event-System (Docs/WorldEventSystem.txt) aufsetzt: das im GDD beschriebene
+"Spiegel-Treppen-Rätsel". Eine unsichtbare Treppe wird nur dann sichtbar (und
+begehbar), solange der Spieler im richtigen Abstand steht UND in den Spiegel
+blickt. Schaut er weg oder geht zu weit weg, blendet die Treppe wieder aus.
+
+Besonderheit gegenüber dem Standard-Flow:
+  - Der Spiegel ist ein NICHT vom Spieler-Input ausgelöstes Interactable. Er
+    feuert seine Events automatisch anhand von Position + Blickrichtung.
+  - Die Events sind bewusst TRANSIENT: der Spiegel feuert direkt über das
+    ObjectEvents-Subsystem und berührt die persistente ActivatedObjects-Liste
+    NICHT. Der Treppen-Zustand ist also ein reiner Laufzeit-Effekt und wird
+    nicht gespeichert (gewollt — die Treppe soll bei jedem Hinschauen neu
+    erscheinen, nicht dauerhaft "freigeschaltet" bleiben).
+  - Zusätzlich rendert der Spiegel eine echte planare Echtzeit-Reflektion über
+    eine SceneCaptureComponent2D + Clip-Plane (eigener Abschnitt unten). Diese
+    ist unabhängig von der Rätsel-Logik.
+
+Beteiligte Klassen:
+  - AInteractableMysteriousMirror     (Source/ProjectMirror/Objects/)
+  - ATriggerableIllusionaryObject    (Source/ProjectMirror/Objects/)
+  - USubsystemObjectEvents            (Source/ProjectMirror/GameWorld/)
+
+
+================================================================================
+AInteractableMysteriousMirror
+================================================================================
+
+Erbt von AInteractableObjectStatic und implementiert zusätzlich IFocusable
+(Lock-On-fähig). Im Konstruktor:
+  - InteractionCategory = Undefined
+  - bIsOneTimeInteraction = false
+  - bIsInteractionPossible = false   → sperrt die normale PlayerActionInput-
+    Interaktion. Der Spiegel reagiert NICHT auf den Interaktions-Button.
+  - StaticMeshComponent-CollisionObjectType = ECC_GameTraceChannel1
+  - EventID startet auf ActivateEventID.
+
+Trigger-Volumina (zwei verschachtelte Bereiche):
+  MirrorSpawnRadius   (USphereComponent) — innerer Bereich. Spieler hier drin
+                      UND zum Spiegel blickend → Treppe erscheint.
+  MirrorDespawnRadius (UBoxComponent)    — äußerer Bereich. Verlässt der Spieler
+                      ihn vollständig, blendet die Treppe aus.
+                      (Name "Radius" ist historisch; technisch eine Box.)
+
+Event-IDs (Konstanten):
+  ActivateEventID   = "OnMirrorFocus"      → Treppe einblenden
+  DeactivateEventID = "OnMirrorFocusLost"  → Treppe ausblenden
+  EventID togglet zwischen beiden, sodass immer das passende nächste Event
+  gefeuert wird.
+
+Overlap-Tracking (BeginPlay bindet je Begin/End-Overlap):
+  - Inneres Volumen → bIsPlayerInInnerRadius, cached zusätzlich CachedPlayerActor.
+  - Äußeres Volumen → bIsPlayerInOuterRadius; beim Verlassen wird der
+    CachedPlayerActor wieder freigegeben.
+  - Alle Handler filtern über ProjectMirrorUtilities::IsAPlayerCharacter, sodass
+    nur der Spieler die Logik auslöst.
+
+Blickrichtungs-Check (CheckPlayerFacingTowardsMirror):
+  DotProduct = Dot(MirrorForward, PlayerForward).
+  Gültig, wenn DotProduct in [-1.0, -0.5] liegt — d.h. der Spieler schaut dem
+  Spiegel entgegen (Vektoren grob entgegengesetzt). -0.5 ≈ 60° Toleranzkegel.
+
+Tick-Logik:
+  bIsPlayerInRange = innen || außen.
+  Nur wenn in Reichweite:
+    - Facing neu berechnen.
+    - Treppe noch nicht sichtbar:
+        innen && blickt hin            → TriggerActivateEvent()
+    - Treppe sichtbar:
+        (weder innen noch außen) || nicht blickend → TriggerDeactivateEvent()
+
+  TriggerActivateEvent():   FireObjectEvent("OnMirrorFocus"),
+                            BIsMirroredObjectVisible=true, EventID→Deactivate.
+  TriggerDeactivateEvent(): BIsMirroredObjectVisible=false,
+                            FireObjectEvent("OnMirrorFocusLost"), EventID→Activate.
+
+  Beide rufen FireObjectEvent direkt am USubsystemObjectEvents auf — KEIN
+  OnInteract, KEIN UpdateObjectStatusInActivatedObjects. Daher keine Persistenz.
+
+
+================================================================================
+SPIEGEL-REFLEKTION (planare Echtzeit-Reflektion via SceneCapture2D)
+================================================================================
+
+Unabhängig von der Rätsel-Logik rendert der Spiegel ein echtes, planar
+gespiegeltes Kamerabild. Zwei zusätzliche Komponenten:
+
+  MirrorPlaneComponent (USceneComponent) — definiert die Spiegelebene über
+                       Position + Forward-Vektor (Plane-Normal).
+  ReflectiveComponent  (USceneCaptureComponent2D) — rendert die gespiegelte
+                       Szene in ein Render Target. Konfiguriert im Konstruktor:
+                       bCaptureEveryFrame=false, bCaptureOnMovement=false,
+                       CaptureSource=SCS_FinalColorHDR (manuell getriggert).
+
+BeginPlay (Reflektions-Setup):
+  - ReflectiveComponent->HideActorComponents(this) — der Spiegel selbst wird aus
+    seinem eigenen Capture ausgeblendet.
+  - bEnableClipPlane=true; ClipPlaneBase/Normal aus dem MirrorPlaneComponent.
+    Die Clip-Plane schneidet alles vor der Spiegelfläche weg (kein Durchscheinen
+    von Geometrie hinter dem Spiegel). Voraussetzung: Projekt-Setting
+    "Support global clip plane for Planar Reflections".
+
+UpdateReflection() (pro Capture aufgerufen):
+  - Spiegelt die aktive Spielerkamera an der Spiegelebene:
+      Position: P' = P - 2*(P-PlanePos)·N * N   (Reflexion des Punkts an der Ebene)
+      Orientierung: Forward/Up per MirrorByVector(N) gespiegelt, daraus die
+      Rotation via FRotationMatrix::MakeFromXZ.
+  - Übernimmt den FOV der Hauptkamera (sonst falsche Parallaxe).
+  - Hinweis im Code: Plane-Position/Normal sind konstant (statischer Spiegel) und
+    müssten nicht pro Update neu geholt werden — bewusst als Optimierungs-Notiz.
+
+Tick (Capture-Gating):
+  Nur wenn StaticMeshComponent->WasRecentlyRendered(0.1f) — d.h. der Spiegel ist
+  aktuell sichtbar — werden UpdateReflection() + CaptureScene() ausgeführt.
+  Off-Screen-Spiegel erzeugen so keine Render-Kosten.
+
+
+================================================================================
+ATriggerableIllusionaryObject
+================================================================================
+
+Erbt von ATriggerableObject. Statt eines harten Sichtbarkeits-Toggles (wie die
+Basis-Reaktionen BecomeVisible/BecomeHidden) blendet die Treppe ihr Material
+weich ein und aus.
+
+BeginPlay:
+  - Erzeugt eine Dynamic Material Instance auf MeshComponent-Slot 0.
+  - Liest den Vektor-Parameter "BaseColor" in CurrentColor (Ausgangsfarbe inkl.
+    Alpha). Bricht sauber ab, wenn Mesh oder DMI ungültig sind.
+
+Blend-Zustand:
+  bShouldBeVisible      — Zielzustand (sichtbar/unsichtbar).
+  bIsCurrentlyBlending  — läuft gerade eine Blende?
+  DesiredAlphaValue     — Ziel-Alpha (1.0 sichtbar / 0.0 unsichtbar).
+  BlendingSpeed (EditAnywhere, default 1.0) — InterpTo-Geschwindigkeit.
+
+Tick (nur während des Blendens):
+  CurrentColor.A = FInterpTo(CurrentColor.A, DesiredAlphaValue, dt, BlendingSpeed)
+  → in den "BaseColor"-Parameter der DMI geschrieben.
+  Bei Erreichen des Ziels (NearlyEqual, Toleranz 0.01):
+    - Alpha exakt auf Ziel snappen, Blenden beenden.
+    - bShouldBeVisible=false → Mesh unsichtbar + NoCollision.
+    - bShouldBeVisible=true  → Mesh sichtbar + QueryAndPhysics.
+
+BecomeVisible():   Mesh sofort sichtbar schalten (damit das Einblenden zu sehen
+                   ist), DesiredAlpha=1, Blend starten.
+BecomeInvisible(): DesiredAlpha=0, Blend starten. Mesh bleibt während der Blende
+                   sichtbar und wird erst am Ende ausgeschaltet, sodass das
+                   Ausblenden sichtbar ist.
+
+OnTriggered_Implementation(ReactionType):
+  BecomeVisible → BecomeVisible(), BecomeHidden → BecomeInvisible(), sonst return.
+
+Verdrahtung (EventMap im Editor):
+  "OnMirrorFocus"     → BecomeVisible
+  "OnMirrorFocusLost" → BecomeHidden
+  bRegisterOnEvent=true (Live-Reaktion), bCheckObjectConditionOnBeginPlay=false
+  (keine History-Wiederherstellung — der Effekt ist transient, s.o.).
+
+
+================================================================================
+BEKANNTE EINSCHRÄNKUNGEN / OFFENE PUNKTE
+================================================================================
+
+1. Keine Blickwinkel-Hysterese
+   Der Facing-Check nutzt eine harte Schwelle (-0.5). Steht der Spieler genau
+   am Rand des Toleranzkegels, kann die Treppe pro Frame zwischen ein- und
+   ausblenden flackern. Lösung: getrennte Ein-/Aus-Schwellen (Hysterese).
+
+2. Ungedrosselter Tick
+   Spiegel und Treppe ticken jeden Frame. Der Spiegel-Tick rechnet zwar nur in
+   Reichweite, die Facing-Berechnung läuft aber dauerhaft, solange der Spieler
+   in einem der Volumina ist. Bei vielen Spiegeln ggf. gaten/intervallen.
+
+3. Unenforced Designer-Annahmen (Treppe)
+   Setzt voraus, dass das zugewiesene Material einen Vektor-Parameter "BaseColor"
+   mit nutzbarem Alpha hat und translucent/masked rendert. Wird nicht erzwungen;
+   fehlt der Parameter, blendet nichts (still). Eine Validierung/Log in BeginPlay
+   wäre sauberer.
+
+4. Despawn-Volumen ist eine Box mit "Radius"-Namen
+   MirrorDespawnRadius ist eine UBoxComponent; der Name suggeriert eine Sphere.
+   Siehe Docs/OffenePunkte.txt — ggf. Benennung/Form für Präzision angleichen.
+
+5. Kein Multiplayer/Replication
+   Spiegel-Facing und Treppen-Blend laufen rein lokal. Für Mehrspieler müssten
+   Trigger-Auswertung und Material-/Kollisionszustand repliziert werden.
+
+6. Reflektion: voller Scene-Capture pro Frame (solange sichtbar)
+   Solange der Spiegel sichtbar ist, läuft pro Frame ein CaptureScene() (ein
+   zusätzlicher Render-Pass). Gegated über WasRecentlyRendered, aber ohne
+   weitere Drosselung (z.B. halbe Framerate, niedrigere Auflösung, Distanz-LOD).
+   Bei mehreren gleichzeitig sichtbaren Spiegeln teuer. Außerdem werden die
+   konstanten Plane-Daten pro Update neu geholt (siehe Code-Kommentar) — könnte
+   einmalig gecacht werden.
+
+================================================================================
+  NACHTRAG 2026-07-20
+================================================================================
+
+UMBENENNUNG
+  ATriggerableBlendableStaircase heißt jetzt ATriggerableIllusionaryObject
+  (Objects/TriggerableIllusionaryObject.h). Der alte Name beschrieb den ersten
+  Anwendungsfall, nicht den Mechanismus — geblendet wird inzwischen alles
+  Mögliche, nicht nur eine Treppe. Die Referenzen oben sind entsprechend
+  angepasst.
+
+  Erweiterungen gegenüber der Beschreibung oben:
+    - Multi-Material-Blend statt nur eines Materials
+    - CurrentAlphaValue als eigenes Feld, statt einen uninitialisierten
+      FLinearColor auszulesen
+    - Snap beim Laden: FinishBlending am Ende von BeginPlay, damit ein bereits
+      aktiviertes Objekt nicht erst sichtbar hereinblendet
+    - Tick-Gating: der Tick läuft nur noch während eines laufenden Blends
+
+ILLUSIONSWAND (neu, Dark-Souls-Stil)
+  ATriggerableIllusionaryHittable : ATriggerableIllusionaryObject, IDamageable
+  (Objects/TriggerableIllusionaryHittable.h)
+
+  Eine Wand, die erst verschwindet, wenn man sie schlägt. Sie implementiert
+  IDamageable und reagiert damit auf dieselbe Trefferkette wie Gegner
+  (Docs/CombatSystem.txt), ohne dass die Angreiferseite etwas davon wissen muss.
+
+  Sie trägt eine EventID und ruft SetObjectActivated BEWUSST OHNE Save-Aufruf —
+  das Speichern übernimmt der reguläre Save-Zyklus. Ein Save pro Wandtreffer
+  wäre unnötige Disk-Last.
+
+  Der Treffersound liegt in USettingsSound::IllusionaryObjectFadeSound und wird
+  in ReceiveDamage gespielt, NICHT in BecomeInvisible: der Schlag soll auch dann
+  hörbar sein, wenn die Wand bereits am Ausblenden ist.
+
+  Kernmechanik PIE-verifiziert; der Treffersound noch nicht.

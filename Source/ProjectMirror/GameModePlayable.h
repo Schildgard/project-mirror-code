@@ -14,6 +14,7 @@ class PROJECTMIRROR_API AGameModePlayable : public AGameModeBase
 {
 	GENERATED_BODY()
 	
+	AGameModePlayable(const FObjectInitializer& ObjectInitializer);
 	virtual void BeginPlay()override;
 	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
 	

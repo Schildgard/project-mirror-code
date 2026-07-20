@@ -32,11 +32,18 @@ public:
 	
 	UPROPERTY(Config, EditAnywhere)
 	TSoftObjectPtr<USoundBase> ButtonFocusLeftSound;
-	
+
+	/*Played when a hittable illusionary object starts fading out after being struck.*/
+	UPROPERTY(Config, EditAnywhere)
+	TSoftObjectPtr<USoundBase> IllusionaryObjectFadeSound;
+
 	UPROPERTY(Config, EditAnywhere)
 	float SoundFadeDuration = 3.f;
 	
 	UPROPERTY(Config, EditAnywhere)
 	TMap<ECreatureType, FFootstepSurfaceSounds> FootstepAudioMap;
+	
+	UPROPERTY(Config, EditAnywhere)
+	TSoftObjectPtr<USoundAttenuation> WeaponSwingAttenuation;
 	
 };
